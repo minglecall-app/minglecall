@@ -346,6 +346,7 @@ export interface Database {
           nsfw_filter_enabled: boolean;
           ai_nudity_shield_enabled: boolean;
           screen_recording_protection: boolean;
+          free_daily_login_coins: number;
           banned_keywords: string[];
           abuse_report_auto_suspend_threshold: number;
           db_max_pool_size: number;

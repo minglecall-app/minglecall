@@ -190,7 +190,7 @@ export const AdminDashboard: React.FC = () => {
   const [taxonomyTab, setTaxonomyTab] = useState<
     'countries' | 'flag_sizes' | 'languages' | 'zodiac' | 'interests' | 'currencies'
   >('countries');
-  const [creatorOpsView, setCreatorOpsView] = useState<'analytics' | 'matrix' | 'targets'>('analytics');
+  const [creatorOpsView, setCreatorOpsView] = useState<'analytics' | 'matrix' | 'targets'>('targets');
   const [infraTab, setInfraTab] = useState<
     'db_pool' | 'r2_storage' | 'moderation' | 'features' | 'sql_schema'
   >('db_pool');

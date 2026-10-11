@@ -482,7 +482,7 @@ export const AdminEconomyConfigHub: React.FC<AdminEconomyConfigHubProps> = ({
               </p>
             </div>
             <div className="p-4 bg-slate-900/80 border border-rose-500/30 rounded-2xl space-y-2">
-              <label className="block text-xs font-bold text-rose-300">Host target share (%)</label>
+              <label className="block text-xs font-bold text-rose-300">Female host target share (%)</label>
               <div className="relative">
                 <input
                   id="admin-female-host-target-share-percent-input"

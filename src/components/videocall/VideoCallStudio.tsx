@@ -74,6 +74,18 @@ export const VideoCallStudio: React.FC<VideoCallStudioProps> = ({ onOpenStore: _
     markCallMediaConnectedRef.current = markCallMediaConnected;
   }, [markCallMediaConnected]);
 
+  const protectScreen = systemSettings.screenRecordingProtection !== false;
+  const [screenCovered, setScreenCovered] = useState(false);
+  useEffect(() => {
+    if (!protectScreen) {
+      setScreenCovered(false);
+      return;
+    }
+    const syncCover = () => setScreenCovered(document.visibilityState !== 'visible');
+    document.addEventListener('visibilitychange', syncCover);
+    return () => document.removeEventListener('visibilitychange', syncCover);
+  }, [protectScreen]);
+
   const [micEnabled, setMicEnabled] = useState(true);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   /** Front (user) vs rear (environment) — not CSS-only mirror */
@@ -1853,6 +1865,7 @@ export const VideoCallStudio: React.FC<VideoCallStudioProps> = ({ onOpenStore: _
     <div
       id="video-call-studio-overlay"
       className="call-cinema-dark fixed inset-0 z-[10050] bg-slate-950 flex flex-col overflow-hidden selection:bg-pink-500 selection:text-white"
+      onContextMenu={protectScreen ? (e) => e.preventDefault() : undefined}
       style={{
         // Shared chrome metrics so PiP / drawers / floaters clear the control bar + home indicator
         ['--vc-safe-top' as string]: 'env(safe-area-inset-top, 0px)',
@@ -1868,6 +1881,11 @@ export const VideoCallStudio: React.FC<VideoCallStudioProps> = ({ onOpenStore: _
     >
       {/* Hidden WebRTC Audio Element */}
       <audio ref={remoteAudioRef} autoPlay />
+      {protectScreen && screenCovered && (
+        <div className="absolute inset-0 z-[80] bg-slate-950 flex items-center justify-center text-slate-300 text-sm font-semibold">
+          Video hidden while this tab is in the background
+        </div>
+      )}
 
       {/* Top Header Controls Bar */}
       <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between gap-2 min-w-0

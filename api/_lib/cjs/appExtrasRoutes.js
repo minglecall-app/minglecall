@@ -502,11 +502,18 @@ async function loadRewardConfig(client) {
     sendGift: { target: 1, reward: 20 },
     masterChest: { target: 4, reward: 50 },
   };
-  const { data } = await client
+  let { data, error } = await client
     .from('system_configs')
-    .select('daily_streak_rewards_json, daily_missions_config_json')
+    .select('daily_streak_rewards_json, daily_missions_config_json, free_daily_login_coins')
     .eq('id', 'default')
     .maybeSingle();
+  if (error) {
+    ({ data } = await client
+      .from('system_configs')
+      .select('daily_streak_rewards_json, daily_missions_config_json')
+      .eq('id', 'default')
+      .maybeSingle());
+  }
   let streak = DEFAULT_STREAK;
   let missions = { ...DEFAULT_MISSIONS };
   try {
@@ -519,7 +526,8 @@ async function loadRewardConfig(client) {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (parsed && typeof parsed === 'object') missions = { ...missions, ...parsed };
   } catch (_) {}
-  return { streakRewards: streak, missions };
+  const loginCoins = Math.max(0, Math.round(Number(data && data.free_daily_login_coins) || 20));
+  return { streakRewards: streak, missions, loginCoins };
 }
 
 function evaluateMission(row, missionKey, missions) {
@@ -778,7 +786,7 @@ async function handleRewards(path, req, res) {
   if (path === 'rewards/claim-streak' && req.method === 'POST') {
     const body = await readJsonBody(req);
     const day = resolveRewardDay((body && body.rewardDay) || '');
-    const { streakRewards } = await loadRewardConfig(client);
+    const { streakRewards, loginCoins } = await loadRewardConfig(client);
     const ensured = await ensureRewardsRollover(client, me, day);
     if (!ensured.success || !ensured.data) {
       return send(res, 500, {
@@ -800,7 +808,7 @@ async function handleRewards(path, req, res) {
       });
     }
     const dayIndex = Math.min(Math.max(0, Number(row.streak_count || 1) - 1), 6);
-    const coins = Number(streakRewards[dayIndex] ?? 20);
+    const coins = Number(streakRewards[dayIndex] ?? loginCoins ?? 20);
     const claim = await claimRewardAtomic(client, {
       userId: me,
       claimKind: 'streak',

@@ -455,6 +455,7 @@ CREATE TABLE IF NOT EXISTS public.system_configs (
     nsfw_filter_enabled BOOLEAN DEFAULT true,
     ai_nudity_shield_enabled BOOLEAN DEFAULT true,
     screen_recording_protection BOOLEAN DEFAULT true,
+    free_daily_login_coins INT DEFAULT 20,
     banned_keywords TEXT[] DEFAULT '{"scam","wire transfer","bank password","abuse"}',
     abuse_report_auto_suspend_threshold INT DEFAULT 5,
     db_max_pool_size INT DEFAULT 50,
@@ -521,6 +522,7 @@ ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS daily_first_call_min_
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS streak_target_days INT DEFAULT 7;
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS streak_boost_duration_days INT DEFAULT 3;
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS min_daily_active_hours_for_streak NUMERIC DEFAULT 2.0;
+ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS free_daily_login_coins INT DEFAULT 20;
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS period_close_utc_time TEXT DEFAULT '00:00';
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS settlement_enabled BOOLEAN DEFAULT true;
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS r2_profile_video_quota_mb INT DEFAULT 100;

@@ -187,9 +187,9 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         kind: 'tab',
         buttonId: 'admin-creator-ops-tab-btn',
         children: [
+          { id: 'targets', label: 'Female host target', icon: 'Crown' },
           { id: 'analytics', label: 'Performance & Intelligence', icon: 'BarChart3' },
           { id: 'matrix', label: 'Rotational Priority Matrix', icon: 'Zap' },
-          { id: 'targets', label: 'Target Thresholds & Bonuses', icon: 'Crown' },
         ],
       },
       {

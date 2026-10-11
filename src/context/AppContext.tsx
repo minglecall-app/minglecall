@@ -3031,6 +3031,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               minPayoutThresholdUSD: data.min_payout_threshold_usd ?? prev.minPayoutThresholdUSD,
               aiNudityShieldEnabled: data.ai_nudity_shield_enabled !== undefined ? data.ai_nudity_shield_enabled : prev.aiNudityShieldEnabled,
               screenRecordingProtection: data.screen_recording_protection !== undefined ? data.screen_recording_protection : prev.screenRecordingProtection,
+              freeDailyLoginCoins: Number.isFinite(Number((data as any).free_daily_login_coins))
+                ? Math.max(0, Math.round(Number((data as any).free_daily_login_coins)))
+                : prev.freeDailyLoginCoins,
               showDevPersonaBar: data.show_dev_persona_bar !== undefined ? data.show_dev_persona_bar : prev.showDevPersonaBar,
               // Prefer non-empty system_configs allow-lists over stale localStorage.
               // Empty DB arrays → undefined so getAllowed* shows the full catalog.

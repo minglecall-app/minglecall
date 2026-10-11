@@ -1663,8 +1663,14 @@ export async function updateSystemConfigsInSupabase(
     if (updates.freeMinutesTrial !== undefined) payload.free_minutes_trial = updates.freeMinutesTrial;
     if (updates.showDevPersonaBar !== undefined) payload.show_dev_persona_bar = updates.showDevPersonaBar;
     if (updates.enableRegularFemaleCoinEarning !== undefined) payload.enable_regular_female_coin_earning = updates.enableRegularFemaleCoinEarning;
-    if (updates.aiNudityShieldEnabled !== undefined) payload.ai_nudity_shield_enabled = updates.aiNudityShieldEnabled;
+    if (updates.aiNudityShieldEnabled !== undefined) {
+      payload.ai_nudity_shield_enabled = updates.aiNudityShieldEnabled;
+      payload.nsfw_filter_enabled = updates.aiNudityShieldEnabled;
+    }
     if (updates.screenRecordingProtection !== undefined) payload.screen_recording_protection = updates.screenRecordingProtection;
+    if (updates.freeDailyLoginCoins !== undefined) {
+      payload.free_daily_login_coins = Math.max(0, Math.round(Number(updates.freeDailyLoginCoins) || 0));
+    }
     if (updates.allowedCountryCodes !== undefined) payload.allowed_country_codes = updates.allowedCountryCodes;
     if (updates.allowedLanguages !== undefined) payload.allowed_languages = updates.allowedLanguages;
     if (updates.allowedZodiacSigns !== undefined) payload.allowed_zodiac_signs = updates.allowedZodiacSigns;
@@ -1782,7 +1788,9 @@ export async function updateSystemConfigsInSupabase(
       'smtp_show_otp',
       'resend_api_key',
       'ai_nudity_shield_enabled',
+      'nsfw_filter_enabled',
       'screen_recording_protection',
+      'free_daily_login_coins',
       'feature_maintenance_mode',
     ];
 

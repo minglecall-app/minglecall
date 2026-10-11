@@ -41,6 +41,41 @@ import { authFetch } from '../../utils/apiClient';
 
 type InfraTab = 'db_pool' | 'r2_storage' | 'moderation' | 'features' | 'sql_schema';
 
+function DailyLoginCoinsField() {
+  const { systemSettings, updateSystemSettings } = useApp();
+  const [coins, setCoins] = useState(String(systemSettings.freeDailyLoginCoins ?? 20));
+
+  useEffect(() => {
+    setCoins(String(systemSettings.freeDailyLoginCoins ?? 20));
+  }, [systemSettings.freeDailyLoginCoins]);
+
+  return (
+    <div className="p-4 bg-[#0F1115] border border-slate-800 rounded-lg md:col-span-2 space-y-2">
+      <div className="text-xs font-bold text-white">Free daily login coins</div>
+      <p className="text-[11px] text-slate-400">
+        Coins used when a streak day has no amount. The 7-day schedule is under Economy → Legacy knobs.
+      </p>
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min="0"
+          step="1"
+          value={coins}
+          onChange={(e) => setCoins(e.target.value)}
+          className="w-32 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-indigo-500"
+        />
+        <button
+          type="button"
+          onClick={() => updateSystemSettings({ freeDailyLoginCoins: Math.max(0, Math.round(Number(coins) || 0)) })}
+          className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white cursor-pointer"
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface AdminDatabaseStorageConfigProps {
   activeTab?: InfraTab;
   onTabChange?: (tab: InfraTab) => void;
@@ -1534,8 +1569,8 @@ export const AdminDatabaseStorageConfig: React.FC<AdminDatabaseStorageConfigProp
                 </div>
                 <input
                   type="checkbox"
-                  checked={config.nsfwFilterEnabled}
-                  onChange={(e) => setConfig({ ...config, nsfwFilterEnabled: e.target.checked })}
+                  checked={systemSettings.aiNudityShieldEnabled !== false}
+                  onChange={(e) => updateSystemSettings({ aiNudityShieldEnabled: e.target.checked })}
                   className="w-4 h-4 accent-rose-500 cursor-pointer"
                 />
               </div>
@@ -1671,6 +1706,34 @@ export const AdminDatabaseStorageConfig: React.FC<AdminDatabaseStorageConfigProp
                 className="w-4 h-4 accent-indigo-500 cursor-pointer"
               />
             </div>
+
+            <div className="p-4 bg-[#0F1115] border border-slate-800 rounded-lg flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold text-white">Screen recording protection</div>
+                <div className="text-[11px] text-slate-400">During a call, blocks the right-click menu and covers the video when the tab is hidden.</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={systemSettings.screenRecordingProtection !== false}
+                onChange={(e) => updateSystemSettings({ screenRecordingProtection: e.target.checked })}
+                className="w-4 h-4 accent-indigo-500 cursor-pointer"
+              />
+            </div>
+
+            <div className="p-4 bg-[#0F1115] border border-slate-800 rounded-lg flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold text-white">AI nudity shield</div>
+                <div className="text-[11px] text-slate-400">Same switch as Content Moderation. Saved on system settings for upload screening.</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={systemSettings.aiNudityShieldEnabled !== false}
+                onChange={(e) => updateSystemSettings({ aiNudityShieldEnabled: e.target.checked })}
+                className="w-4 h-4 accent-indigo-500 cursor-pointer"
+              />
+            </div>
+
+            <DailyLoginCoinsField />
 
             <div className="p-4 bg-rose-950/20 border border-rose-900/40 rounded-lg flex items-center justify-between md:col-span-2">
               <div>
