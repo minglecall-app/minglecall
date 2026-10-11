@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, createServiceClient } from '../../../lib/nextAuth';
 import { checkRateLimit, isRedisConfigured } from '../../../lib/redis';
+import { broadcastChatMessage } from '../../../lib/realtimeBroadcast';
 
 export const runtime = 'nodejs';
 export const maxDuration = 20;
@@ -124,20 +125,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: { message: error.message } }, { status: 500 });
   }
 
+  const message = {
+    id: data.id,
+    senderId: data.sender_id,
+    receiverId: data.receiver_id,
+    text: data.text || '',
+    mediaUrl: data.media_url || undefined,
+    type: data.type,
+    isRead: Boolean(data.is_read),
+    createdAt: data.created_at,
+    timestamp: data.created_at,
+    clientTempId: clientTempId || undefined,
+  };
+
+  // Durable insert succeeded — fan out on targeted user/conversation broadcast topics
+  try {
+    await broadcastChatMessage(client, message, [auth.profileId, receiverId]);
+  } catch (e: any) {
+    console.warn('[api/messages] realtime broadcast failed (message still durable)', e?.message);
+  }
+
   return NextResponse.json({
     success: true,
-    message: {
-      id: data.id,
-      senderId: data.sender_id,
-      receiverId: data.receiver_id,
-      text: data.text || '',
-      mediaUrl: data.media_url || undefined,
-      type: data.type,
-      isRead: Boolean(data.is_read),
-      createdAt: data.created_at,
-      timestamp: data.created_at,
-      clientTempId: clientTempId || undefined,
-    },
+    message,
   });
 }
 

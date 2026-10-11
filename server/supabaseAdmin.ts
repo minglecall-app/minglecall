@@ -121,11 +121,14 @@ export function getSupabaseAdmin(): SupabaseClient | null {
   }
   if (!supabaseAdmin) {
     try {
+      // PostgREST HTTPS client (server-pooled). Raw SQL must use DATABASE_URL on :6543.
       supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
         auth: {
           persistSession: false,
           autoRefreshToken: false,
         },
+        db: { schema: 'public' },
+        global: { headers: { 'X-Client-Info': 'minglecall-express-admin' } },
       });
       console.log('[Supabase Admin] Initialized server-side Supabase client connected to:', supabaseUrl);
     } catch (err) {
@@ -622,18 +625,64 @@ export async function bulkUpsertProfilesAdmin(profiles: any[]): Promise<{ succes
 /**
  * Fetch all profiles from Supabase server-side
  */
-export async function fetchProfilesAdmin(): Promise<{ success: boolean; profiles?: any[]; error?: string }> {
+export async function fetchProfilesAdmin(opts?: {
+  cursor?: string | null;
+  limit?: number;
+}): Promise<{ success: boolean; profiles?: any[]; nextCursor?: string | null; error?: string }> {
   const client = getSupabaseAdmin();
   if (!client) {
     return { success: false, error: 'Supabase not configured' };
   }
 
   try {
-    const { data, error } = await client.from('profiles').select('*').order('created_at', { ascending: false });
-    if (error) {
-      return { success: false, error: error.message };
+    const pageSize = 50;
+    const singlePage = opts?.cursor !== undefined || opts?.limit !== undefined;
+
+    if (singlePage) {
+      let limit = Number(opts?.limit) || pageSize;
+      if (!Number.isFinite(limit) || limit <= 0) limit = pageSize;
+      limit = Math.min(Math.floor(limit), pageSize);
+
+      let q = client
+        .from('profiles')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (opts?.cursor) {
+        q = q.lt('created_at', opts.cursor);
+      }
+
+      const { data, error } = await q;
+      if (error) {
+        return { success: false, error: error.message };
+      }
+      const profiles = data || [];
+      const nextCursor =
+        profiles.length === limit ? profiles[profiles.length - 1]?.created_at || null : null;
+      return { success: true, profiles, nextCursor };
     }
-    return { success: true, profiles: data || [] };
+
+    // Legacy callers: walk cursor pages (never one unbounded select *)
+    const all: any[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 40; page++) {
+      let q = client
+        .from('profiles')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(pageSize);
+      if (cursor) q = q.lt('created_at', cursor);
+      const { data, error } = await q;
+      if (error) {
+        return { success: false, error: error.message };
+      }
+      const batch = data || [];
+      all.push(...batch);
+      if (batch.length < pageSize) break;
+      cursor = batch[batch.length - 1]?.created_at || null;
+      if (!cursor) break;
+    }
+    return { success: true, profiles: all, nextCursor: null };
   } catch (err: any) {
     return { success: false, error: err.message };
   }

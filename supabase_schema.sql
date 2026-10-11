@@ -135,6 +135,11 @@ EXCEPTION
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_profiles_role_status ON public.profiles(role, online_status);
+-- Discovery directory cursor pages: ORDER BY created_at DESC LIMIT 50
+CREATE INDEX IF NOT EXISTS idx_profiles_created_at ON public.profiles(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_profiles_discovery_banned_created
+  ON public.profiles(created_at DESC)
+  WHERE is_banned IS DISTINCT FROM true;
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles(email);
 -- Soft uniqueness for registrations (case-insensitive). Skips quietly if duplicates already exist.
 DO $$
@@ -193,8 +198,11 @@ CREATE TABLE IF NOT EXISTS public.messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Pair + time: primary conversation history lookup (cursor: created_at < X LIMIT 40)
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON public.messages(sender_id, receiver_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_unread ON public.messages(receiver_id, is_read) WHERE is_read = false;
+-- Reverse pair direction + inbox / recent-for-user scans
+CREATE INDEX IF NOT EXISTS idx_messages_sender_created ON public.messages(sender_id, created_at DESC);
 
 -- Evolve messages type CHECK + rating_info for durable call-rating request cards
 DO $$
@@ -3787,6 +3795,9 @@ CREATE INDEX IF NOT EXISTS idx_messages_receiver_sender_created
   ON public.messages(receiver_id, sender_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_receiver_created
   ON public.messages(receiver_id, created_at DESC);
+-- Documented high-concurrency message/discovery indexes (idempotent with §messages / §profiles above)
+CREATE INDEX IF NOT EXISTS idx_messages_sender_created ON public.messages(sender_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_profiles_created_at ON public.profiles(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_matches_status ON public.matches(status);
 CREATE INDEX IF NOT EXISTS idx_matches_user_b ON public.matches(user_b_id);
 CREATE INDEX IF NOT EXISTS idx_matches_last_interaction

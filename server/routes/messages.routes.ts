@@ -213,24 +213,23 @@ export function createMessagesRouter(runtime: ServerRuntime) {
 
       const mapped = mapMessageRow(data, clientTempId);
 
-      // Fast delivery after DB insert: peer + sender (multi-device). Realtime is backup only.
+      // Local Express WS (dev dual-run) + targeted Supabase Realtime Broadcast
       try {
-        const peerN = runtime.sendToUser?.(receiverId, {
-          type: 'chat:message',
-          message: mapped,
-        }) ?? 0;
-        const senderN = runtime.sendToUser?.(senderId, {
-          type: 'chat:message',
-          message: mapped,
-        }) ?? 0;
-        if (peerN === 0) {
-          console.warn('[messages/send] WS peer notify: zero open sockets for', receiverId);
-        }
-        if (senderN === 0) {
-          console.warn('[messages/send] WS sender notify: zero open sockets for', senderId);
-        }
+        runtime.sendToUser?.(receiverId, { type: 'chat:message', message: mapped });
+        runtime.sendToUser?.(senderId, { type: 'chat:message', message: mapped });
       } catch (notifyErr: any) {
         console.warn('[messages/send] WS notify failed:', notifyErr?.message || notifyErr);
+      }
+      try {
+        // CJS helper — persist-first targeted Broadcast on user:{id} + conversation:{pair}
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { broadcastChatMessage } = require('../../api/_lib/cjs/realtimeBroadcast');
+        await broadcastChatMessage(client, mapped, [senderId, receiverId]);
+      } catch (broadcastErr: any) {
+        console.warn(
+          '[messages/send] realtime broadcast failed (message still durable)',
+          broadcastErr?.message || broadcastErr
+        );
       }
 
       return res.status(201).json({
@@ -240,6 +239,74 @@ export function createMessagesRouter(runtime: ServerRuntime) {
     } catch (err: any) {
       console.error('[messages/send] exception:', err);
       return sendError(res, 500, err?.message || 'Failed to send message', 'SEND_FAILED');
+    }
+  });
+
+  /** GET /api/messages/conversation/:otherUserId?cursor=&limit= — cursor page (max 50) */
+  router.get('/conversation/:otherUserId', requireAuth, async (req, res) => {
+    try {
+      if (!isSupabaseAdminConfigured()) {
+        return sendError(res, 503, 'Messages backend unavailable', 'NO_ADMIN');
+      }
+      const me = authUserId(req);
+      const otherUserId = String(req.params.otherUserId || '').trim();
+      if (!me || !otherUserId || otherUserId === me) {
+        return sendError(res, 400, 'Invalid otherUserId', 'INVALID_OTHER');
+      }
+
+      const cursor = String(req.query?.cursor || '').trim();
+      let limit = Number(req.query?.limit || 40);
+      if (!Number.isFinite(limit) || limit <= 0) limit = 40;
+      limit = Math.min(Math.floor(limit), 50);
+
+      const client = getSupabaseAdmin()!;
+      let clearedAt: string | null = null;
+      try {
+        const { data: clearRow } = await client
+          .from('message_conversation_clears')
+          .select('cleared_at')
+          .eq('user_id', me)
+          .eq('other_user_id', otherUserId)
+          .maybeSingle();
+        clearedAt = clearRow?.cleared_at ? String(clearRow.cleared_at) : null;
+      } catch {
+        /* optional table */
+      }
+
+      let q = client
+        .from('messages')
+        .select('*')
+        .or(
+          `and(sender_id.eq.${me},receiver_id.eq.${otherUserId}),and(sender_id.eq.${otherUserId},receiver_id.eq.${me})`
+        )
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (clearedAt) q = q.gt('created_at', clearedAt);
+      if (cursor) q = q.lt('created_at', cursor);
+
+      const { data, error } = await q;
+      if (error) {
+        return sendError(res, 500, error.message || 'Failed to load messages', 'LOAD_FAILED');
+      }
+
+      const newestFirst = data || [];
+      const nextCursor =
+        newestFirst.length === limit
+          ? newestFirst[newestFirst.length - 1]?.created_at || null
+          : null;
+      const messages = newestFirst
+        .slice()
+        .reverse()
+        .map((row) => mapMessageRow(row));
+
+      return res.json({
+        success: true,
+        messages,
+        nextCursor,
+        pageSize: limit,
+      });
+    } catch (err: any) {
+      return sendError(res, 500, err?.message || 'Failed to load messages', 'LOAD_FAILED');
     }
   });
 

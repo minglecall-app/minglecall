@@ -158,15 +158,32 @@ async function handleCreator(path, req, res) {
 
   if (path === 'creator/heartbeat' && req.method === 'POST') {
     await readJsonBody(req);
-    await auth.client
-      .from('profiles')
-      .update({
-        last_seen_at: new Date().toISOString(),
-        online_status: 'online',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', auth.profileId);
-    // Bump creator_metrics online seconds when table exists
+    // Presence lease only — never write profiles.last_seen_at / online_status here
+    try {
+      const {
+        isRedisConfigured,
+        setPresence,
+      } = require('./redisPresence');
+      if (!isRedisConfigured()) {
+        return send(res, 503, {
+          success: false,
+          error: {
+            message: 'Presence service unavailable — Redis is not configured',
+            code: 'REDIS_UNAVAILABLE',
+          },
+        });
+      }
+      await setPresence(auth.profileId, 'online');
+    } catch (redisErr) {
+      return send(res, 503, {
+        success: false,
+        error: {
+          message: (redisErr && redisErr.message) || 'Redis presence write failed',
+          code: 'REDIS_UNAVAILABLE',
+        },
+      });
+    }
+    // Optional in-memory-style metrics bump (creator_metrics only — not profiles presence)
     try {
       const { data: cm } = await auth.client
         .from('creator_metrics')
@@ -203,7 +220,7 @@ async function handleCreator(path, req, res) {
           performanceTier: rows.performance_tier || 'bronze',
         }
       : null;
-    return send(res, 200, { success: true, metrics });
+    return send(res, 200, { success: true, metrics, redis: true });
   }
 
   if (path === 'creator/ready-now-toggle' && req.method === 'POST') {

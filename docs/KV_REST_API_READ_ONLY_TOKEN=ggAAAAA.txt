@@ -1,0 +1,35 @@
+KV_REST_API_READ_ONLY_TOKEN="ggAAAAAAA1iXAAIgcDJ9bByccyBQj_c2-uWi9LFmMyq9Bzi5csZysOU_wnn5cw"
+KV_REST_API_TOKEN="gQAAAAAAA1iXAAIgcDJlOWViMTczNmUxZTQ0YWQxOTA0YWM5OGZmOTFmMjA1NQ"
+KV_REST_API_URL="https://neutral-stag-219287.upstash.io"
+KV_URL="rediss://default:gQAAAAAAA1iXAAIgcDJlOWViMTczNmUxZTQ0YWQxOTA0YWM5OGZmOTFmMjA1NQ@neutral-stag-219287.upstash.io:6379"
+REDIS_URL="rediss://default:gQAAAAAAA1iXAAIgcDJlOWViMTczNmUxZTQ0YWQxOTA0YWM5OGZmOTFmMjA1NQ@neutral-stag-219287.upstash.io:6379"
+
+IMPLEMENTATION CHECK PROMPT
+You are my expert system architect and code auditor. We have just refactored our dating app to support a high-concurrency architecture (Next.js/Vercel + Supabase + Upstash Redis + LiveKit Cloud). 
+
+Please perform a rigorous audit of the codebase to verify whether all migrations and architectural rules have been implemented correctly. Check specifically for the following items:
+
+1. **Presence & Heartbeat Verification:**
+   - Locate where user presence heartbeats are handled. 
+   - Verify that heartbeats write to **Upstash Redis** (using key patterns like `presence:{userId}` with a TTL) and **do not** write directly to Supabase/PostgreSQL on every tick.
+   - Confirm that permanent `last_seen` values in PostgreSQL are only updated on explicit login/logout events.
+
+2. **Database & Connection Pooling:**
+   - Check Supabase client initialization files. Verify that connection pooling (e.g., PgBouncer port `6543`) is configured for serverless/Vercel environments.
+   - Inspect database queries for message history and user discovery to ensure cursor-based pagination and proper b-tree indexes (e.g., on `messages(conversation_id, created_at)`) are in place.
+
+3. **Coin Billing & Transaction Safety:**
+   - Inspect coin deduction, wallet updates, and call-ending endpoints.
+   - Verify that coin billing logic is executed **strictly server-side**, never trusted from client payloads, and protected by atomic database transactions or row-level locking to prevent race conditions and negative balances.
+
+4. **Realtime Chat & Routing:**
+   - Review how chat messages are sent and delivered. Confirm that messages are inserted into Supabase PostgreSQL first and then distributed via targeted Supabase Realtime Broadcast channels (rather than global or unconstrained database change streams).
+   - Ensure Vercel API routes are stateless and do not rely on in-memory `Map` or global state structures.
+
+5. **LiveKit Token Generation:**
+   - Check that video/audio media traffic is handled entirely via LiveKit Cloud, and that room access tokens are securely generated server-side.
+
+Please output a detailed verification report listing:
+- **Passed Checks:** What has been correctly implemented.
+- **Failures / Violations:** Any remaining old patterns (e.g., direct DB heartbeats, client-side billing trust, unpooled DB connections) that still need fixing.
+- **Action Items:** Exact file paths and recommended code fixes for any failing checks.

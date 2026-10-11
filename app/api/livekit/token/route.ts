@@ -6,6 +6,8 @@ import { getCallState, isRedisConfigured } from '../../../../lib/redis';
 export const runtime = 'nodejs';
 export const maxDuration = 15;
 
+const OPEN_STATUSES = new Set(['ringing', 'active', 'accepted', 'in_call', 'connecting']);
+
 function getLiveKitEnv() {
   const clean = (v: string) => v.trim().replace(/^["']|["']$/g, '');
   return {
@@ -45,29 +47,45 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Authorize participant via Redis call state or call_logs
-  let authorized = false;
-  if (isRedisConfigured()) {
+  const isAdminTest = roomName.startsWith('admin_test_room_') && auth.role === 'admin';
+  let authorized = isAdminTest;
+  let resolvedRoom = roomName;
+
+  if (!authorized && isRedisConfigured()) {
     const state = await getCallState(callId);
     if (state) {
       const ids = [state.callerId, state.receiverId].map((x) => String(x || ''));
       authorized = ids.includes(auth.profileId) || ids.includes(auth.userId);
     }
   }
+
   if (!authorized) {
     const client = createServiceClient();
-    if (client) {
-      const { data: row } = await client
-        .from('call_logs')
-        .select('caller_id, receiver_id, host_id, status')
-        .eq('id', callId)
-        .maybeSingle();
-      if (row) {
-        const ids = [row.caller_id, row.receiver_id, row.host_id].map((x) => String(x || ''));
-        authorized = ids.includes(auth.profileId) || ids.includes(auth.userId);
+    if (!client) {
+      return NextResponse.json(
+        { success: false, error: { message: 'Supabase not configured', code: 'NO_SUPABASE' } },
+        { status: 503 }
+      );
+    }
+    const { data: row } = await client
+      .from('call_logs')
+      .select('id, caller_id, receiver_id, host_id, status')
+      .eq('id', callId)
+      .maybeSingle();
+    if (row) {
+      const st = String(row.status || '').toLowerCase();
+      if (st && !OPEN_STATUSES.has(st)) {
+        return NextResponse.json(
+          { success: false, error: { message: 'This call has already ended.', code: 'CALL_ENDED' } },
+          { status: 409 }
+        );
       }
+      const ids = [row.caller_id, row.receiver_id, row.host_id].map((x) => String(x || ''));
+      authorized = ids.includes(auth.profileId) || ids.includes(auth.userId);
+      if (authorized && row.id) resolvedRoom = String(row.id);
     }
   }
+
   if (!authorized) {
     return NextResponse.json(
       { success: false, error: { message: 'Not a call participant', code: 'FORBIDDEN' } },
@@ -82,7 +100,7 @@ export async function POST(req: NextRequest) {
   });
   at.addGrant({
     roomJoin: true,
-    room: roomName,
+    room: resolvedRoom,
     canPublish: true,
     canSubscribe: true,
   });
@@ -92,7 +110,7 @@ export async function POST(req: NextRequest) {
     success: true,
     token,
     url: wsUrl,
-    roomName,
+    roomName: resolvedRoom,
     identity: auth.profileId,
   });
 }

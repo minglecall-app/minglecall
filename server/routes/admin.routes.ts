@@ -23,6 +23,7 @@ import {
 import { hardDeleteUserCompletely, cleanupOrphanAuthUsersAdmin } from '../userHardDelete';
 import { isR2Configured, updateR2RuntimeConfig } from '../r2Storage';
 import { requireAdmin, requireAuth } from '../middleware/auth';
+import { listServerDiagnosticModules, runServerDiagnostic } from '../../lib/systemDiagnostics';
 import { getPasswordPolicyError } from '../../shared/passwordPolicy';
 import {
   DEFAULT_EMAIL_TEMPLATES,
@@ -1023,6 +1024,35 @@ export function createAdminRouter(ctx: ServerRuntime): Router {
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message || 'Failed to update infrastructure parameters' });
+    }
+  });
+
+  router.post('/system-diagnostics', requireAdmin, async (req, res) => {
+    const moduleId = String(req.body?.moduleId || '').trim();
+    const profileId = String((req as any).profileId || (req as any).user?.id || '').trim();
+    try {
+      const result = await runServerDiagnostic(moduleId, {
+        profileId,
+        channel: req.body?.channel,
+        nonce: req.body?.nonce,
+        token: req.body?.token,
+      });
+      if (!result) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            message: `Unknown diagnostic module. Known: ${listServerDiagnosticModules().join(', ')}`,
+            code: 'UNKNOWN_MODULE',
+          },
+        });
+      }
+      return res.json({ success: true, data: result });
+    } catch (err: any) {
+      console.error('[system-diagnostics]', moduleId, err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: { message: 'Diagnostic failed', code: 'DIAGNOSTIC_FAILED' },
+      });
     }
   });
 

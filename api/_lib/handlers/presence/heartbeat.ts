@@ -1,11 +1,10 @@
 /**
- * POST /api/presence/heartbeat — Redis presence lease (no Postgres on routine ticks).
+ * POST /api/presence/heartbeat — Redis presence lease only (never Postgres).
  */
 import {
   sendJson,
   readJsonBody,
   requireAuthFromBearer,
-  createServiceClient,
   type VercelReq,
   type VercelRes,
 } from '../../vercelAuth';
@@ -14,6 +13,7 @@ import {
   setPresence,
   deletePresence,
   mgetPresence,
+  RedisUnavailableError,
   type PresenceStatus,
 } from '../../../../lib/redis';
 
@@ -32,41 +32,47 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     return sendJson(res, auth.status, { success: false, error: auth.error });
   }
 
+  if (!isRedisConfigured()) {
+    return sendJson(res, 503, {
+      success: false,
+      error: {
+        message: 'Presence service unavailable — Redis is not configured',
+        code: 'REDIS_UNAVAILABLE',
+      },
+    });
+  }
+
   const body = await readJsonBody(req);
   const statusRaw = String(body?.status || 'online').toLowerCase();
   const writeStatus: PresenceStatus =
     statusRaw === 'offline' ? 'offline' : statusRaw === 'busy' || statusRaw === 'in_call' ? 'busy' : 'online';
-  const durable = Boolean(body?.durable) || writeStatus === 'offline';
 
-  if (isRedisConfigured()) {
+  try {
     if (writeStatus === 'offline') {
       await deletePresence(auth.profileId);
     } else {
       await setPresence(auth.profileId, writeStatus);
     }
-  }
-
-  if (durable || !isRedisConfigured()) {
-    const client = createServiceClient();
-    if (client) {
-      const nowIso = new Date().toISOString();
-      await client
-        .from('profiles')
-        .update({
-          online_status: writeStatus,
-          last_seen_at: nowIso,
-          updated_at: nowIso,
-        } as any)
-        .eq('id', auth.profileId);
-    }
+  } catch (err: any) {
+    return sendJson(res, 503, {
+      success: false,
+      error: {
+        message: err?.message || 'Redis presence write failed',
+        code: 'REDIS_UNAVAILABLE',
+      },
+    });
   }
 
   const peerIds = Array.isArray(body?.peerIds)
     ? body.peerIds.map((id: unknown) => String(id || '').trim()).filter(Boolean).slice(0, 200)
     : [];
   let presence: Record<string, PresenceStatus> = {};
-  if (isRedisConfigured() && peerIds.length) {
-    presence = await mgetPresence(peerIds);
+  try {
+    if (peerIds.length) {
+      presence = await mgetPresence(peerIds);
+    }
+  } catch {
+    /* best-effort */
   }
   presence[auth.profileId] = writeStatus;
 
@@ -75,6 +81,6 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     userId: auth.profileId,
     status: writeStatus,
     presence,
-    redis: isRedisConfigured(),
+    redis: true,
   });
 }

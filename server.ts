@@ -49,6 +49,12 @@ import { AccessToken } from 'livekit-server-sdk';
 import { UserProfile } from './src/types';
 import type { ServerRuntime } from './server/runtimeTypes';
 import {
+  isRedisConfigured,
+  setPresence,
+  deletePresence,
+  type PresenceStatus,
+} from './lib/redis';
+import {
   createAuthRouter,
   createStorageRouter,
   createPresenceRouter,
@@ -1347,7 +1353,15 @@ async function startServer(): Promise<express.Express> {
             if (!userId) break;
 
             if (status === 'online' || status === 'offline' || status === 'busy' || status === 'in_call') {
-              const result = applyPresenceHeartbeat(userId, status, { persistStatus: true });
+              // Redis lease only — never profiles.last_seen_at on WS heartbeats
+              const writeStatus: PresenceStatus =
+                status === 'offline' ? 'offline' : status === 'busy' || status === 'in_call' ? 'busy' : 'online';
+              if (isRedisConfigured()) {
+                void (writeStatus === 'offline' ? deletePresence(userId) : setPresence(userId, writeStatus)).catch(
+                  () => {}
+                );
+              }
+              const result = applyPresenceHeartbeat(userId, status, { persistStatus: false });
               if (result.changed) {
                 broadcastPresence();
                 broadcastUsers();
@@ -1404,7 +1418,10 @@ async function startServer(): Promise<express.Express> {
           case 'heartbeat': {
             const targetId = authenticatedUserId;
             if (targetId) {
-              const result = applyPresenceHeartbeat(targetId, 'online', { persistStatus: true });
+              if (isRedisConfigured()) {
+                void setPresence(targetId, 'online').catch(() => {});
+              }
+              const result = applyPresenceHeartbeat(targetId, 'online', { persistStatus: false });
               if (result.changed) {
                 broadcastPresence();
                 broadcastUsers();
@@ -1765,9 +1782,12 @@ async function startServer(): Promise<express.Express> {
           }
 
           case 'creator:heartbeat': {
-            // Server-owned accrual; ignore msg.creatorId / secondsIncrement
+            // Server-owned accrual + Redis presence lease; ignore msg.creatorId / secondsIncrement
             const creatorId = authenticatedUserId;
             if (creatorId) {
+              if (isRedisConfigured()) {
+                void setPresence(creatorId, 'online').catch(() => {});
+              }
               const metrics = accrueCreatorOnlineTime(creatorId);
               sendJson(ws, {
                 type: 'creator_metrics:update',
@@ -1850,15 +1870,17 @@ async function startServer(): Promise<express.Express> {
           broadcastPresence();
           broadcastUsers();
 
-          if (isSupabaseAdminConfigured()) {
-            updateUserStatusAdmin(disconnectedUserId, 'offline').catch(() => {});
+          if (isRedisConfigured()) {
+            void deletePresence(disconnectedUserId).catch(() => {});
           }
         }
-      } else if (disconnectedUserId && isSupabaseAdminConfigured()) {
-        // Socket already removed but we still know who left — force DB offline
+      } else if (disconnectedUserId) {
+        // Socket already removed but we still know who left — expire Redis lease only
         presenceMap.set(disconnectedUserId, 'offline');
         userLastSeen.delete(disconnectedUserId);
-        updateUserStatusAdmin(disconnectedUserId, 'offline').catch(() => {});
+        if (isRedisConfigured()) {
+          void deletePresence(disconnectedUserId).catch(() => {});
+        }
         broadcastPresence();
       }
       authenticatedUserId = null;
@@ -1937,9 +1959,9 @@ async function startServer(): Promise<express.Express> {
           if (u) u.onlineStatus = 'offline';
           presenceLastKnownStatus.set(uid, 'offline');
           accrueCreatorOnlineTime(uid, { stop: true, forcePersist: true });
-
-          if (isSupabaseAdminConfigured()) {
-            updateUserStatusAdmin(uid, 'offline').catch(() => {});
+          // Expire Redis lease only — durable last_seen_at is login/logout only
+          if (isRedisConfigured()) {
+            void deletePresence(uid).catch(() => {});
           }
         }
 
@@ -3508,63 +3530,78 @@ async function startServer(): Promise<express.Express> {
     });
   });
 
-  // Process real-time virtual gift transaction
+  // Process real-time virtual gift transaction — atomic RPC only (FOR UPDATE + idempotency)
   app.post('/api/gifts/send', requireAuth, sensitiveActionLimiter, async (req, res) => {
     try {
       const senderId = String((req as any).profileId || (req as any).user?.id || '');
-      const { receiverId, giftId } = req.body;
+      const receiverId = String(req.body?.receiverId || '').trim();
+      const giftId = String(req.body?.giftId || '').trim();
 
-      // Reject client-supplied earn fields
-      if (req.body?.hostCoinsEarned != null || req.body?.tlCoinsEarned != null) {
+      // Reject client-supplied money fields
+      if (
+        req.body?.hostCoinsEarned != null ||
+        req.body?.tlCoinsEarned != null ||
+        req.body?.coinCost != null ||
+        req.body?.cost != null ||
+        req.body?.coins != null ||
+        req.body?.amount != null
+      ) {
         return res.status(400).json({
           success: false,
-          error: { message: 'Client must not supply earn amounts', code: 'CLIENT_EARN_FORBIDDEN' },
+          error: {
+            message: 'Client must not supply coin amounts; gift prices are server-derived.',
+            code: 'CLIENT_AMOUNTS_FORBIDDEN',
+          },
         });
       }
 
-      const catalogGift = await resolveCatalogGiftById(String(giftId || ''), VIRTUAL_GIFTS);
+      const catalogGift = await resolveCatalogGiftById(giftId, VIRTUAL_GIFTS);
       const giftCost = Number(catalogGift?.coinCost || 0);
       if (!senderId || !receiverId || !catalogGift || giftCost <= 0) {
         return res.status(400).json({ success: false, error: 'Invalid gift.' });
       }
 
-      const sender = serverUsers.get(senderId);
-      let receiver = serverUsers.get(receiverId);
-
-      // Prefer DB balances when admin client available
-      const supabase = isSupabaseAdminConfigured() ? getSupabaseAdmin() : null;
-      let senderBalance = Number(sender?.coinBalance || 0);
-      if (supabase) {
-        const { data: senderRow } = await supabase
-          .from('profiles')
-          .select('id, coin_balance')
-          .eq('id', senderId)
-          .maybeSingle();
-        if (senderRow) senderBalance = Number(senderRow.coin_balance || 0);
-        if (!receiver) {
-          const { data: recvRow } = await supabase
-            .from('profiles')
-            .select(
-              'id, role, team_leader_id, created_by_id, earnings_coins, total_gifts_received_count, name'
-            )
-            .eq('id', receiverId)
-            .maybeSingle();
-          if (recvRow) {
-            receiver = {
-              id: recvRow.id,
-              role: recvRow.role,
-              teamLeaderId: recvRow.team_leader_id,
-              createdById: recvRow.created_by_id,
-              earningsCoins: recvRow.earnings_coins,
-              totalGiftsReceivedCount: recvRow.total_gifts_received_count,
-              name: recvRow.name,
-            } as any;
-          }
-        }
+      const idempotencyKey = String(req.body?.idempotencyKey || req.body?.clientTempId || '')
+        .trim()
+        .slice(0, 200);
+      if (!idempotencyKey) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            message: 'idempotencyKey or clientTempId is required',
+            code: 'IDEMPOTENCY_REQUIRED',
+          },
+        });
       }
 
-      if (senderBalance < giftCost) {
-        return res.status(400).json({ success: false, error: 'Insufficient coins.' });
+      const supabase = isSupabaseAdminConfigured() ? getSupabaseAdmin() : null;
+      if (!supabase) {
+        return res.status(503).json({
+          success: false,
+          error: { message: 'Billing unavailable', code: 'NO_SUPABASE' },
+        });
+      }
+
+      let receiver = serverUsers.get(receiverId);
+      if (!receiver) {
+        const { data: recvRow } = await supabase
+          .from('profiles')
+          .select(
+            'id, role, team_leader_id, created_by_id, earnings_coins, total_gifts_received_count, name'
+          )
+          .eq('id', receiverId)
+          .maybeSingle();
+        if (recvRow) {
+          receiver = {
+            id: recvRow.id,
+            role: recvRow.role,
+            teamLeaderId: recvRow.team_leader_id,
+            createdById: recvRow.created_by_id,
+            earningsCoins: recvRow.earnings_coins,
+            totalGiftsReceivedCount: recvRow.total_gifts_received_count,
+            name: recvRow.name,
+          } as any;
+        }
       }
 
       const isEligibleHost =
@@ -3575,7 +3612,7 @@ async function startServer(): Promise<express.Express> {
 
       const shares = await loadGiftSharePercents(supabase);
       const tlId = isEligibleHost
-        ? (receiver?.teamLeaderId || receiver?.createdById || null)
+        ? receiver?.teamLeaderId || receiver?.createdById || null
         : null;
       const split = computeGiftCoinSplit({
         giftCost,
@@ -3584,100 +3621,64 @@ async function startServer(): Promise<express.Express> {
         hasTeamLeader: Boolean(tlId),
         hostEligible: Boolean(isEligibleHost),
       });
-      const hostCoinsEarned = split.hostCoins;
-      const tlCoinsEarned = split.tlCoins;
 
-      const newSenderBalance = Math.max(0, senderBalance - giftCost);
-      if (supabase) {
-        const { error: debitErr } = await supabase
-          .from('profiles')
-          .update({ coin_balance: newSenderBalance })
-          .eq('id', senderId)
-          .gte('coin_balance', giftCost);
-        if (debitErr) {
-          console.error('[gifts/send] debit:', debitErr.message);
-          return res.status(500).json({ success: false, error: 'Failed to debit coins.' });
-        }
+      const { data: rpcRaw, error: rpcErr } = await supabase.rpc('gift_spend_atomic', {
+        p_sender_id: senderId,
+        p_receiver_id: receiverId,
+        p_tl_id: tlId ? String(tlId) : null,
+        p_coins: giftCost,
+        p_host_coins: split.hostCoins,
+        p_tl_coins: split.tlCoins,
+        p_idempotency_key: idempotencyKey,
+        p_metadata: {
+          giftId,
+          giftName: catalogGift.name,
+          kind: 'gift',
+          cost: giftCost,
+        },
+      });
+
+      if (rpcErr) {
+        console.error('[gifts/send] RPC error:', rpcErr.message);
+        return res.status(500).json({
+          success: false,
+          error: { message: 'Gift billing failed', code: 'GIFT_RPC_FAILED' },
+        });
       }
 
+      const rpcResult = typeof rpcRaw === 'string' ? JSON.parse(rpcRaw) : rpcRaw;
+      if (!rpcResult?.success) {
+        const code = rpcResult?.error_code || 'GIFT_FAILED';
+        const status = code === 'INSUFFICIENT_BALANCE' ? 400 : 500;
+        return res.status(status).json({
+          success: false,
+          error: rpcResult?.error_message || 'Gift failed',
+          code,
+        });
+      }
+
+      const newSenderBalance = Number(rpcResult.new_sender_balance || 0);
+      const hostBalanceAfter = Number(rpcResult.new_host_earnings || 0);
+      const hostCoinsEarned = Number(rpcResult.host_coins_earned ?? split.hostCoins) || 0;
+      const tlCoinsEarned = Number(rpcResult.tl_coins_earned ?? split.tlCoins) || 0;
+
+      const sender = serverUsers.get(senderId);
       if (sender) {
         sender.coinBalance = newSenderBalance;
         serverUsers.set(senderId, sender);
-        if (isSupabaseAdminConfigured()) {
-          upsertProfileAdmin(sender).catch(() => {});
-        }
       }
-
-      let hostBalanceAfter = Number(receiver?.earningsCoins || 0);
-      if (receiver && hostCoinsEarned > 0 && isEligibleHost) {
-        hostBalanceAfter = hostBalanceAfter + hostCoinsEarned;
+      if (receiver && hostCoinsEarned > 0 && isEligibleHost && !rpcResult.duplicate) {
         receiver.earningsCoins = hostBalanceAfter;
         receiver.totalGiftsReceivedCount = (receiver.totalGiftsReceivedCount || 0) + 1;
         serverUsers.set(receiverId, receiver);
-        if (supabase) {
-          await supabase
-            .from('profiles')
-            .update({
-              earnings_coins: hostBalanceAfter,
-              total_gifts_received_count: receiver.totalGiftsReceivedCount,
-            })
-            .eq('id', receiverId);
-        } else if (isSupabaseAdminConfigured()) {
-          upsertProfileAdmin(receiver).catch(() => {});
-        }
         recordCreatorEarnCoins(receiverId, { giftCoins: hostCoinsEarned });
       }
-
-      let tlBalanceAfter = 0;
-      if (tlId && tlCoinsEarned > 0 && isEligibleHost) {
-        const tl = serverUsers.get(tlId);
-        if (supabase) {
-          const { data: tlRow } = await supabase
-            .from('profiles')
-            .select('id, earnings_coins')
-            .eq('id', tlId)
-            .maybeSingle();
-          const base = Number(tlRow?.earnings_coins ?? tl?.earningsCoins ?? 0);
-          tlBalanceAfter = base + tlCoinsEarned;
-          await supabase.from('profiles').update({ earnings_coins: tlBalanceAfter }).eq('id', tlId);
-        } else if (tl) {
-          tl.earningsCoins = (tl.earningsCoins || 0) + tlCoinsEarned;
-          tlBalanceAfter = tl.earningsCoins;
-          serverUsers.set(tlId, tl);
-          if (isSupabaseAdminConfigured()) {
-            upsertProfileAdmin(tl).catch(() => {});
-          }
-        }
+      if (tlId && tlCoinsEarned > 0) {
+        const tl = serverUsers.get(String(tlId));
         if (tl) {
-          tl.earningsCoins = tlBalanceAfter;
-          serverUsers.set(tlId, tl);
+          tl.earningsCoins = Number(rpcResult.new_tl_earnings || tl.earningsCoins || 0);
+          serverUsers.set(String(tlId), tl);
         }
-      }
-
-      if (isSupabaseAdminConfigured()) {
-        const sourceKey = `gift:${senderId}:${receiverId}:${giftId}:${Date.now()}`;
-        appendGiftEarnLedger({
-          sourceKey,
-          senderUserId: senderId,
-          giftCost,
-          senderBalanceAfter: newSenderBalance,
-          hostUserId: isEligibleHost ? receiverId : null,
-          hostCoins: hostCoinsEarned,
-          hostBalanceAfter,
-          tlUserId: tlId ? String(tlId) : null,
-          tlCoins: tlCoinsEarned,
-          tlBalanceAfter,
-          kind: 'gift',
-          metadata: {
-            giftId,
-            giftName: catalogGift.name,
-            giftCost,
-            senderId,
-            hostSharePercent: split.hostSharePercent,
-            tlSharePercent: split.tlSharePercent,
-            platformCoins: split.platformCoins,
-          },
-        }).catch((err) => console.warn('[gifts/send] wallet_ledger:', err?.message || err));
       }
 
       broadcastUsers();
@@ -3688,7 +3689,8 @@ async function startServer(): Promise<express.Express> {
         hostEarnings: isEligibleHost ? hostBalanceAfter : 0,
         hostCoinsEarned,
         tlCoinsEarned,
-        platformCoins: split.platformCoins,
+        platformCoins: Math.max(0, giftCost - hostCoinsEarned - tlCoinsEarned),
+        duplicate: Boolean(rpcResult.duplicate),
       });
     } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });

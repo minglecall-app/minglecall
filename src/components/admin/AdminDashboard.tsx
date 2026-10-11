@@ -94,6 +94,7 @@ import { UserAnalyticsModal } from './UserAnalyticsModal';
 import { AdminSilentCallMonitorModal } from './AdminSilentCallMonitorModal';
 import { AdminDatabaseStorageConfig } from './AdminDatabaseStorageConfig';
 import { AdminApiHealthPanel } from './AdminApiHealthPanel';
+import { AdminSystemTestingPanel } from './AdminSystemTestingPanel';
 import { ResetMockDataModal } from './ResetMockDataModal';
 import { AdminTaxonomyManager } from './AdminTaxonomyManager';
 import { AdminCreatorTargetConfig } from './AdminCreatorTargetConfig';
@@ -3380,6 +3381,7 @@ export const AdminDashboard: React.FC = () => {
         />
       )}
       {activeSubTab === 'api-health' && <AdminApiHealthPanel />}
+      {activeSubTab === 'system-testing' && <AdminSystemTestingPanel />}
       {/* Email: OTP / transactional templates, policy, logs */}
       {activeSubTab === 'email' && <AdminEmailPanel />}
 

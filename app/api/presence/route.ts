@@ -9,17 +9,41 @@ export async function GET(req: NextRequest) {
   if (auth.ok === false) {
     return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
   }
+
+  if (!isRedisConfigured()) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          message: 'Presence service unavailable — Redis is not configured',
+          code: 'REDIS_UNAVAILABLE',
+        },
+      },
+      { status: 503 }
+    );
+  }
+
   const idsParam = req.nextUrl.searchParams.get('ids') || '';
   const ids = idsParam.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 200);
-  if (!isRedisConfigured() || !ids.length) {
-    return NextResponse.json({
-      success: true,
-      presence: {},
-      source: isRedisConfigured() ? 'redis_empty_ids' : 'redis_unconfigured',
-    });
+  if (!ids.length) {
+    return NextResponse.json({ success: true, presence: {}, source: 'redis_empty_ids' });
   }
-  const presence = await mgetPresence(ids);
-  return NextResponse.json({ success: true, presence, source: 'redis' });
+
+  try {
+    const presence = await mgetPresence(ids);
+    return NextResponse.json({ success: true, presence, source: 'redis' });
+  } catch (err: any) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          message: err?.message || 'Redis presence read failed',
+          code: 'REDIS_UNAVAILABLE',
+        },
+      },
+      { status: 503 }
+    );
+  }
 }
 
 export async function OPTIONS() {

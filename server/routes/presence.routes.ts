@@ -12,7 +12,18 @@ import {
   setPresence,
   deletePresence,
   mgetPresence,
+  RedisUnavailableError,
 } from '../../lib/redis';
+
+function redisUnavailable(res: any, err?: any) {
+  return res.status(503).json({
+    success: false,
+    error: {
+      message: err?.message || 'Presence service unavailable — Redis is not configured',
+      code: 'REDIS_UNAVAILABLE',
+    },
+  });
+}
 
 function readClientSessionId(req: { headers: Record<string, unknown>; body?: any }): string | null {
   const header = req.headers['x-session-id'] || req.headers['X-Session-Id'];
@@ -26,7 +37,6 @@ function readClientSessionId(req: { headers: Record<string, unknown>; body?: any
 
 async function rejectIfSessionReplaced(req: any, res: any, profileId: string): Promise<boolean> {
   const clientSessionId = readClientSessionId(req);
-  // Only reject when the client sends a session id that no longer matches
   if (!clientSessionId) return false;
   const check = await assertActiveSessionAdmin({
     profileId,
@@ -54,10 +64,9 @@ export function createPresenceRouter(ctx: ServerRuntime): Router {
     broadcastPresence,
     broadcastUsers,
     applyPresenceHeartbeat,
-    getAuthoritativeStatus,
   } = ctx;
 
-  // Dedicated Presence REST Endpoint — online | busy | offline
+  // Presence status — Redis lease only (last_seen_at only on login/logout elsewhere)
   router.post('/', requireAuth, async (req, res) => {
     try {
       const userId = String((req as any).profileId || (req as any).user?.id || '');
@@ -66,6 +75,8 @@ export function createPresenceRouter(ctx: ServerRuntime): Router {
         return res.status(400).json({ success: false, error: 'userId required' });
       }
       if (await rejectIfSessionReplaced(req, res, userId)) return;
+
+      if (!isRedisConfigured()) return redisUnavailable(res);
 
       const requested =
         status === 'offline'
@@ -82,8 +93,16 @@ export function createPresenceRouter(ctx: ServerRuntime): Router {
         });
       }
 
+      try {
+        if (requested === 'offline') await deletePresence(userId);
+        else await setPresence(userId, requested);
+      } catch (err: any) {
+        return redisUnavailable(res, err);
+      }
+
+      // In-memory map for local WS peers — never persistStatus to Postgres
       const result = applyPresenceHeartbeat(userId, requested, {
-        persistStatus: true,
+        persistStatus: false,
         fromUnload: requested === 'offline',
       });
 
@@ -96,21 +115,24 @@ export function createPresenceRouter(ctx: ServerRuntime): Router {
         success: true,
         status: result.status,
         presence: getFormattedPresence(),
+        redis: true,
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  // Lightweight liveness ping — Redis lease when configured; durable DB only on transitions
+  // Heartbeat — Redis only; 503 if Redis missing/unreachable
   router.post('/heartbeat', requireAuth, async (req, res) => {
     try {
       const userId = String((req as any).profileId || (req as any).user?.id || '');
-      const { status, durable, peerIds } = req.body || {};
+      const { status, peerIds } = req.body || {};
       if (!userId) {
         return res.status(400).json({ success: false, error: 'userId required' });
       }
       if (await rejectIfSessionReplaced(req, res, userId)) return;
+
+      if (!isRedisConfigured()) return redisUnavailable(res);
 
       const requested =
         status === 'offline'
@@ -128,16 +150,16 @@ export function createPresenceRouter(ctx: ServerRuntime): Router {
       }
 
       const writeStatus = requested || 'online';
-      const durableWrite = Boolean(durable) || writeStatus === 'offline';
 
-      if (isRedisConfigured()) {
+      try {
         if (writeStatus === 'offline') await deletePresence(userId);
         else await setPresence(userId, writeStatus);
+      } catch (err: any) {
+        return redisUnavailable(res, err);
       }
 
       const result = applyPresenceHeartbeat(userId, writeStatus, {
-        // Skip Postgres on routine Redis heartbeats
-        persistStatus: durableWrite || !isRedisConfigured(),
+        persistStatus: false,
       });
 
       if (result.changed) {
@@ -146,24 +168,42 @@ export function createPresenceRouter(ctx: ServerRuntime): Router {
       }
 
       let presence = getFormattedPresence();
-      if (isRedisConfigured() && Array.isArray(peerIds) && peerIds.length) {
-        const redisMap = await mgetPresence(peerIds.map(String));
-        presence = { ...presence, ...redisMap, [userId]: writeStatus };
+      try {
+        if (Array.isArray(peerIds) && peerIds.length) {
+          const redisMap = await mgetPresence(peerIds.map(String));
+          presence = { ...presence, ...redisMap, [userId]: writeStatus };
+        }
+      } catch {
+        presence = { ...presence, [userId]: writeStatus };
       }
 
       return res.json({
         success: true,
         status: result.status,
         presence,
-        redis: isRedisConfigured(),
+        redis: true,
       });
     } catch (err: any) {
+      if (err instanceof RedisUnavailableError || err?.code === 'REDIS_UNAVAILABLE') {
+        return redisUnavailable(res, err);
+      }
       return res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  router.get('/', requireAuth, (req, res) => {
-    return res.json({ success: true, presence: getFormattedPresence() });
+  router.get('/', requireAuth, async (req, res) => {
+    if (!isRedisConfigured()) return redisUnavailable(res);
+    const idsParam = String(req.query.ids || '');
+    const ids = idsParam.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 200);
+    try {
+      if (ids.length) {
+        const presence = await mgetPresence(ids);
+        return res.json({ success: true, presence, source: 'redis' });
+      }
+      return res.json({ success: true, presence: getFormattedPresence(), source: 'memory' });
+    } catch (err: any) {
+      return redisUnavailable(res, err);
+    }
   });
 
   return router;
@@ -187,7 +227,6 @@ export function createCreatorRouter(ctx: ServerRuntime): Router {
       const creatorId = req.query.creatorId as string | undefined;
       const selfId = String((req as any).profileId || (req as any).user?.id || '');
       if (creatorId) {
-        // Non-admins may only fetch self (agency lists use full map from WS/admin)
         const role = (req as any).profile?.role;
         const allowed =
           creatorId === selfId || role === 'admin' || role === 'team_leader' || role === 'agency_manager';
@@ -203,7 +242,7 @@ export function createCreatorRouter(ctx: ServerRuntime): Router {
     }
   });
 
-  // Server-owned accrual nudge — ignores body.secondsIncrement
+  // Creator online nudge — Redis presence lease; no profiles.last_seen_at writes
   router.post('/heartbeat', requireAuth, async (req, res) => {
     try {
       const creatorId = String((req as any).profileId || (req as any).user?.id || '');
@@ -211,10 +250,17 @@ export function createCreatorRouter(ctx: ServerRuntime): Router {
         return res.status(400).json({ success: false, error: 'creatorId is required' });
       }
 
+      if (!isRedisConfigured()) return redisUnavailable(res);
+      try {
+        await setPresence(creatorId, 'online');
+      } catch (err: any) {
+        return redisUnavailable(res, err);
+      }
+
       const metrics = accrueCreatorOnlineTime(creatorId, { forcePersist: false });
       const result = metrics || creatorMetricsMap.get(creatorId) || null;
 
-      return res.json({ success: true, metrics: result });
+      return res.json({ success: true, metrics: result, redis: true });
     } catch (err: any) {
       console.error('Error in POST /api/creator/heartbeat:', err);
       return res.status(500).json({ success: false, error: err.message });
@@ -337,8 +383,8 @@ export function createCreatorRouter(ctx: ServerRuntime): Router {
       const user = serverUsers.get(creatorId);
       if (user) {
         user.earningsCoins = (user.earningsCoins || 0) + coinsToAdd;
-        user.totalLifetimeEarnedUSD = Number(
-          ((user.totalLifetimeEarnedUSD || 0) + usdToAdd).toFixed(2)
+        user.totalCashEarnedUSD = Number(
+          ((user.totalCashEarnedUSD || 0) + usdToAdd).toFixed(2)
         );
         if (isSupabaseAdminConfigured()) {
           await upsertProfileAdmin(user);

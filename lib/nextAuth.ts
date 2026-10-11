@@ -1,8 +1,11 @@
 /**
  * Auth helpers for Next.js App Router (Web Request).
+ * supabase-js uses PostgREST (HTTPS) — already pooled server-side.
+ * Raw SQL drivers must use getPooledDatabaseUrl() (port 6543).
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { NextRequest } from 'next/server';
+import { getPooledDatabaseUrl } from './supabaseDb';
 
 export function getSupabaseEnv() {
   const clean = (v: string) => v.trim().replace(/^["']|["']$/g, '');
@@ -25,8 +28,12 @@ export function getSupabaseEnv() {
 export function createServiceClient(): SupabaseClient | null {
   const { url, serviceKey } = getSupabaseEnv();
   if (!url || !serviceKey) return null;
+  // Touch pooler env early so misconfigured DATABASE_URL is logged once per cold start
+  void getPooledDatabaseUrl();
   return createClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    db: { schema: 'public' },
+    global: { headers: { 'X-Client-Info': 'minglecall-next-service' } },
   });
 }
 

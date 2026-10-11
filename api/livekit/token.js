@@ -278,12 +278,37 @@ module.exports = async function handler(req, res) {
       return send(res, 403, { error: 'Admin test rooms require admin privileges.' });
     }
 
-    // Non-admin 1:1 rooms: must be a call participant (profile id or auth id).
-    // Do NOT require status=active — accept may race ahead of sync.
+    // Non-admin 1:1 rooms: must be a call participant (Redis call state or open call_logs).
     if (!isAdminTestRoom && !isAdmin) {
       let authorized = false;
       let callRow = null;
-      if (auth.client) {
+
+      // Redis call lease (authoritative under Vercel concurrency)
+      try {
+        const {
+          getCallState,
+          isRedisConfigured,
+        } = require('../_lib/cjs/redisPresence');
+        if (isRedisConfigured()) {
+          const state = await getCallState(roomName);
+          if (state) {
+            const myIds = collectMyIds(auth);
+            const ids = [state.callerId, state.receiverId].map((v) => String(v || '').trim());
+            if (ids.some((id) => myIds.has(id))) {
+              authorized = true;
+            } else {
+              return send(res, 403, {
+                error: 'Not a call participant',
+                code: 'NOT_CALL_MEMBER',
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[api/livekit/token] redis call state', e && e.message);
+      }
+
+      if (!authorized && auth.client) {
         callRow = await loadCallRow(auth.client, roomName);
         // Accept / sync race: row may land a few hundred ms after UI flips to active
         if (!callRow) {
@@ -316,14 +341,6 @@ module.exports = async function handler(req, res) {
             });
           }
         }
-      }
-
-      // Fallback: room name embeds participant id (legacy / admin tooling)
-      if (
-        !authorized &&
-        (roomName.includes(identity) || roomName.includes(String(auth.userId)))
-      ) {
-        authorized = true;
       }
 
       if (!authorized) {

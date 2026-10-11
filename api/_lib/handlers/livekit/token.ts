@@ -1,7 +1,6 @@
 /**
- * LiveKit token minting for Vercel — uses LIVEKIT_* from server env.
- * AccessToken is dynamically imported so the catch-all cold-start does not
- * require livekit-server-sdk evaluation for /api/health and /api/r2-test.
+ * LiveKit token minting — requires valid Supabase JWT and call participant auth
+ * via Redis call state or open call_logs (never room-name string guessing alone).
  */
 import {
   sendJson,
@@ -12,6 +11,88 @@ import {
   type VercelReq,
   type VercelRes,
 } from '../../vercelAuth';
+
+const OPEN_STATUSES = new Set(['ringing', 'active', 'accepted', 'in_call', 'connecting']);
+
+async function authorizeCallParticipant(
+  profileId: string,
+  userId: string,
+  callId: string,
+  role: string
+): Promise<{ ok: true; roomName: string } | { ok: false; status: number; error: string; code: string }> {
+  if (role === 'admin' && String(callId).startsWith('admin_test_room_')) {
+    return { ok: true, roomName: callId };
+  }
+
+  // Redis lease first (authoritative for in-flight calls on Vercel)
+  try {
+    const { getCallState, isRedisConfigured } = await import('../../../../lib/redis');
+    if (isRedisConfigured()) {
+      const state = await getCallState(callId);
+      if (state) {
+        const ids = [state.callerId, state.receiverId].map((x) => String(x || ''));
+        if (ids.includes(profileId) || ids.includes(userId)) {
+          return { ok: true, roomName: callId };
+        }
+        return {
+          ok: false,
+          status: 403,
+          error: 'Not a call participant',
+          code: 'NOT_CALL_MEMBER',
+        };
+      }
+    }
+  } catch {
+    /* Redis optional */
+  }
+
+  const client = createServiceClient();
+  if (!client) {
+    return {
+      ok: false,
+      status: 503,
+      error: 'Supabase not configured',
+      code: 'NO_SUPABASE',
+    };
+  }
+
+  const { data: row } = await client
+    .from('call_logs')
+    .select('id, caller_id, receiver_id, host_id, status')
+    .eq('id', callId)
+    .maybeSingle();
+
+  if (!row) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'Not authorized for this LiveKit room',
+      code: 'NOT_CALL_MEMBER',
+    };
+  }
+
+  const st = String(row.status || '').toLowerCase();
+  if (st && !OPEN_STATUSES.has(st)) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'This call has already ended.',
+      code: 'CALL_ENDED',
+    };
+  }
+
+  const ids = [row.caller_id, row.receiver_id, row.host_id].map((x) => String(x || ''));
+  if (!ids.includes(profileId) && !ids.includes(userId)) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'Not a call participant',
+      code: 'NOT_CALL_MEMBER',
+    };
+  }
+
+  return { ok: true, roomName: String(row.id || callId) };
+}
 
 export default async function handler(req: VercelReq, res: VercelRes) {
   try {
@@ -30,12 +111,12 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     }
 
     const body = await readJsonBody(req);
-    const roomName = String(body.roomName || '').trim();
+    const roomName = String(body.roomName || body.callId || '').trim();
     const identity = auth.profileId;
     const isAdmin = auth.role === 'admin';
 
     if (!roomName || !identity) {
-      return sendJson(res, 400, { error: 'roomName is required' });
+      return sendJson(res, 400, { error: 'roomName or callId is required' });
     }
 
     const isAdminTestRoom = roomName.startsWith('admin_test_room_');
@@ -43,37 +124,15 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       return sendJson(res, 403, { error: 'Admin test rooms require admin privileges.' });
     }
 
-    // Authorize room join from env-backed Supabase when possible (Vercel has no in-memory activeCalls).
-    if (!isAdminTestRoom && !isAdmin) {
-      const memberHint =
-        roomName.includes(identity) ||
-        roomName.includes(auth.userId) ||
-        roomName.startsWith('call_') ||
-        roomName.startsWith('lk_');
-
-      let dbMember = false;
-      if (!memberHint) {
-        const client = createServiceClient();
-        if (client) {
-          const { data: callRow } = await client
-            .from('call_logs')
-            .select('caller_id, receiver_id, host_id')
-            .eq('id', roomName)
-            .maybeSingle();
-          const ids = [
-            callRow?.caller_id,
-            callRow?.receiver_id,
-            (callRow as any)?.host_id,
-          ].map((v) => String(v || ''));
-          dbMember = ids.includes(identity) || ids.includes(auth.userId);
-        }
-      }
-
-      if (!memberHint && !dbMember) {
-        return sendJson(res, 403, {
-          error:
-            'Not authorized for this LiveKit room. Join only works for calls you participate in.',
-        });
+    if (!isAdminTestRoom) {
+      const authz = await authorizeCallParticipant(
+        auth.profileId,
+        auth.userId,
+        roomName,
+        auth.role
+      );
+      if (authz.ok === false) {
+        return sendJson(res, authz.status, { error: authz.error, code: authz.code });
       }
     }
 
@@ -88,7 +147,8 @@ export default async function handler(req: VercelReq, res: VercelRes) {
         configured: false,
         token: null,
         wsUrl: livekit.wsUrl || null,
-        message: 'LiveKit credentials missing. Set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET in Vercel env.',
+        message:
+          'LiveKit credentials missing. Set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET in Vercel env.',
       });
     }
 

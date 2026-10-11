@@ -61,6 +61,28 @@ function decodeJwtRole(token) {
   }
 }
 
+/** Transaction-pooler URL for raw SQL drivers (PgBouncer / Supavisor :6543). */
+function getPooledDatabaseUrl() {
+  const raw = String(
+    process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || process.env.POSTGRES_URL || ''
+  ).trim();
+  if (!raw) return null;
+  let url = raw;
+  const isPooled =
+    /:6543(\/|\?|$)/.test(url) ||
+    /\.pooler\.supabase\.com/i.test(url) ||
+    /[?&]pgbouncer=true\b/i.test(url);
+  if (!isPooled && /:5432(\/|\?|$)/.test(url) && /supabase\.(co|com)/i.test(url)) {
+    url = url.replace(/:5432(?=\/|\?|$)/, ':6543');
+  }
+  if (/:5432(\/|\?|$)/.test(url) && !/:6543(\/|\?|$)/.test(url)) {
+    console.warn(
+      '[api/_lib/cjs/helpers] DATABASE_URL looks like a direct Postgres session (5432). Use Supabase Transaction pooler port 6543 on Vercel.'
+    );
+  }
+  return url;
+}
+
 function createServiceClient() {
   const { url, serviceKey } = getSupabaseEnv();
   if (!url || !serviceKey) return null;
@@ -72,8 +94,12 @@ function createServiceClient() {
     );
     return null;
   }
+  // PostgREST HTTPS — pooled server-side. Warn if a direct DB URL is mis-set.
+  void getPooledDatabaseUrl();
   return createClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    db: { schema: 'public' },
+    global: { headers: { 'X-Client-Info': 'minglecall-vercel-cjs' } },
   });
 }
 
@@ -1063,6 +1089,7 @@ module.exports = {
   bearer,
   readJsonBody,
   getSupabaseEnv,
+  getPooledDatabaseUrl,
   createServiceClient,
   createClient,
   isValidEmail,

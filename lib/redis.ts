@@ -47,21 +47,42 @@ export function callStateKey(callId: string): string {
   return `call:${callId}`;
 }
 
+export class RedisUnavailableError extends Error {
+  code = 'REDIS_UNAVAILABLE';
+  constructor(message = 'Redis presence store unavailable') {
+    super(message);
+    this.name = 'RedisUnavailableError';
+  }
+}
+
+/** Heartbeat / presence writes — Redis only. Throws if unconfigured or unreachable. */
 export async function setPresence(
   userId: string,
   status: PresenceStatus,
   ttlSec: number = PRESENCE_TTL_SEC
-): Promise<boolean> {
+): Promise<true> {
   const client = getRedis();
-  if (!client || !userId) return false;
-  await client.set(presenceKey(userId), status, { ex: ttlSec });
-  return true;
+  if (!client || !userId) {
+    throw new RedisUnavailableError('UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not configured');
+  }
+  try {
+    await client.set(presenceKey(userId), status, { ex: ttlSec });
+    return true;
+  } catch (err: any) {
+    throw new RedisUnavailableError(err?.message || 'Redis SET failed');
+  }
 }
 
 export async function deletePresence(userId: string): Promise<void> {
   const client = getRedis();
-  if (!client || !userId) return;
-  await client.del(presenceKey(userId));
+  if (!client || !userId) {
+    throw new RedisUnavailableError('UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not configured');
+  }
+  try {
+    await client.del(presenceKey(userId));
+  } catch (err: any) {
+    throw new RedisUnavailableError(err?.message || 'Redis DEL failed');
+  }
 }
 
 export async function getPresence(userId: string): Promise<PresenceStatus | null> {
@@ -78,20 +99,30 @@ export async function mgetPresence(
 ): Promise<Record<string, PresenceStatus>> {
   const client = getRedis();
   const out: Record<string, PresenceStatus> = {};
-  if (!client || !userIds.length) return out;
+  if (!client) {
+    throw new RedisUnavailableError(
+      'UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not configured'
+    );
+  }
+  if (!userIds.length) return out;
   const ids = Array.from(new Set(userIds.map((id) => String(id || '').trim()).filter(Boolean))).slice(
     0,
     200
   );
   if (!ids.length) return out;
-  const keys = ids.map(presenceKey);
-  const values = await client.mget<(string | null)[]>(...keys);
-  ids.forEach((id, i) => {
-    const v = values?.[i];
-    if (v === 'online' || v === 'busy' || v === 'offline') out[id] = v;
-    else out[id] = 'offline';
-  });
-  return out;
+  try {
+    const keys = ids.map(presenceKey);
+    const values = await client.mget<(string | null)[]>(...keys);
+    ids.forEach((id, i) => {
+      const v = values?.[i];
+      if (v === 'online' || v === 'busy' || v === 'offline') out[id] = v;
+      else out[id] = 'offline';
+    });
+    return out;
+  } catch (err: any) {
+    if (err instanceof RedisUnavailableError) throw err;
+    throw new RedisUnavailableError(err?.message || 'Redis MGET failed');
+  }
 }
 
 export async function setCallState(

@@ -166,19 +166,35 @@ module.exports = async function handler(req, res) {
     const client = auth.client;
 
     if (req.method === 'GET') {
-      const { data, error } = await client
+      // Cursor page for discovery/directory — never unbounded select *
+      const cursor = String((req.query && req.query.cursor) || '').trim();
+      let limit = Number((req.query && req.query.limit) || 50);
+      if (!Number.isFinite(limit) || limit <= 0) limit = 50;
+      limit = Math.min(Math.floor(limit), 50);
+
+      let q = client
         .from('profiles')
         .select('*')
+        .or('is_banned.eq.false,is_banned.is.null')
         .order('created_at', { ascending: false })
-        .limit(500);
+        .limit(limit);
+      if (cursor) q = q.lt('created_at', cursor);
+
+      const { data, error } = await q;
       if (error) {
         return send(res, 500, { success: false, error: { message: error.message } });
       }
       const users = (data || []).map(mapProfileRow);
+      const nextCursor =
+        users.length === limit && users[users.length - 1]
+          ? users[users.length - 1].createdAt || users[users.length - 1].created_at || null
+          : null;
       return send(res, 200, {
         success: true,
         users,
         count: users.length,
+        nextCursor,
+        pageSize: limit,
         timestamp: Date.now(),
       });
     }

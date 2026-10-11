@@ -78,6 +78,7 @@ import {
   subscribeToRealtimeChat,
   subscribeToFriendRequests,
   fetchRecentMessagesForUser,
+  loadConversationHistoryPage,
   fetchPayoutRequestsFromSupabase,
   upsertPayoutRequestToSupabase,
   fetchCallLogsFromSupabase,
@@ -267,6 +268,11 @@ interface AppContextType {
     /** Shared optimistic id so in-call overlay can paint before HTTP returns */
     clientTempId?: string
   ) => Promise<{ ok: boolean; clientTempId?: string }>;
+  /** Cursor page of older messages for a 1:1 thread (server-authoritative). */
+  loadOlderMessages: (
+    otherUserId: string,
+    cursor?: string | null
+  ) => Promise<{ nextCursor: string | null; loaded: number }>;
   /** Peer fast-path: upsert temp in-call chat from LiveKit data / WS preview (deduped). */
   ingestInCallChatPreview: (payload: {
     clientTempId: string;
@@ -1982,18 +1988,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     users?: UserProfile[];
   }> => {
     try {
-      // Backend directory (service role) — critical on Vercel when client RLS/empty reads hide hosts
+      // Backend directory (service role) — cursor pages of 50 (never unbounded)
       let apiUsers: UserProfile[] | null = null;
       try {
-        const res = await authFetch('/api/users');
-        if (res.ok) {
-          const data = await res.json().catch(() => ({}));
-          if (data?.success && Array.isArray(data.users)) {
-            apiUsers = data.users as UserProfile[];
+        const collected: UserProfile[] = [];
+        let cursor: string | null = null;
+        for (let page = 0; page < 10; page++) {
+          const qs = new URLSearchParams({ limit: '50' });
+          if (cursor) qs.set('cursor', cursor);
+          const res = await authFetch(`/api/users?${qs.toString()}`);
+          if (!res.ok) {
+            console.warn('[syncUsersFromSupabase] /api/users HTTP', res.status);
+            break;
           }
-        } else {
-          console.warn('[syncUsersFromSupabase] /api/users HTTP', res.status);
+          const data = await res.json().catch(() => ({}));
+          if (!data?.success || !Array.isArray(data.users)) break;
+          collected.push(...(data.users as UserProfile[]));
+          cursor = typeof data.nextCursor === 'string' && data.nextCursor ? data.nextCursor : null;
+          if (!cursor) break;
         }
+        if (collected.length) apiUsers = collected;
       } catch (apiErr: any) {
         console.warn('[syncUsersFromSupabase] /api/users failed:', apiErr?.message || apiErr);
       }
@@ -6375,15 +6389,34 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
     );
 
-    // Sync gift transaction to backend server & Supabase Admin
+    // Sync gift via atomic server RPC (prices/shares server-derived; never send coinCost)
+    const giftIdempotencyKey =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `gift_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     authFetch('/api/gifts/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         receiverId: activeCall.receiverId,
         giftId: gift.id,
+        clientTempId: giftIdempotencyKey,
+        idempotencyKey: giftIdempotencyKey,
       }),
-    }).catch(() => {});
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => null);
+        if (res.ok && json?.success && typeof json.senderBalance === 'number') {
+          setUsers((prev) =>
+            prev.map((u) =>
+              u.id === currentUser.id ? { ...u, coinBalance: Number(json.senderBalance) } : u
+            )
+          );
+        } else if (!res.ok) {
+          console.warn('[sendGiftInCall] server gift failed', json?.error || res.status);
+        }
+      })
+      .catch(() => {});
 
     // Update active call state
     setActiveCall((prev) => {
@@ -6612,6 +6645,34 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setChatMessages((prev) => prev.filter((m) => m.id !== clientTempId && m.clientTempId !== clientTempId));
       showToast('Message failed', err?.message || 'Network error sending message', 'error');
       return { ok: false, clientTempId };
+    }
+  };
+
+  /** Cursor-based older history for a 1:1 thread (max 40–50 per page). */
+  const loadOlderMessages = async (
+    otherUserId: string,
+    cursor?: string | null
+  ): Promise<{ nextCursor: string | null; loaded: number }> => {
+    const me = currentUser?.id;
+    const other = String(otherUserId || '').trim();
+    if (!me || !other) return { nextCursor: null, loaded: 0 };
+    try {
+      const page = await loadConversationHistoryPage(me, other, {
+        cursor: cursor || null,
+        limit: 40,
+      });
+      if (!page?.messages?.length) return { nextCursor: null, loaded: 0 };
+      setChatMessages((prev) => {
+        const seen = new Set(prev.map((m) => m.id));
+        const incoming = page.messages.filter((m) => m.id && !seen.has(m.id));
+        if (!incoming.length) return prev;
+        // Prepend older messages (chronological merge)
+        return [...incoming, ...prev];
+      });
+      return { nextCursor: page.nextCursor, loaded: page.messages.length };
+    } catch (e) {
+      console.warn('[loadOlderMessages]', e);
+      return { nextCursor: null, loaded: 0 };
     }
   };
 
@@ -9393,12 +9454,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     if (catalogGift) {
       try {
+        const giftIdempotencyKey =
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `qm_gift_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
         const res = await authFetch('/api/gifts/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             receiverId: targetUserId,
             giftId: catalogGift.id,
+            clientTempId: giftIdempotencyKey,
+            idempotencyKey: giftIdempotencyKey,
           }),
         });
         const json = await res.json().catch(() => null);
@@ -10230,6 +10297,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         sendGiftInCall,
         getEffectiveCallRate,
         sendMessage,
+        loadOlderMessages,
         ingestInCallChatPreview,
         notifyInCallChatPreview,
         clearChatHistory,

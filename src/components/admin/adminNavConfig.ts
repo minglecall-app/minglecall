@@ -14,6 +14,7 @@ export type AdminSubTabKey =
   | 'livekit'
   | 'infra'
   | 'api-health'
+  | 'system-testing'
   | 'email'
   | 'skus'
   | 'leaders'
@@ -64,7 +65,8 @@ export type AdminNavIconName =
   | 'Ruler'
   | 'Languages'
   | 'Sparkles'
-  | 'Heart';
+  | 'Heart'
+  | 'FlaskConical';
 
 export interface AdminNavL2Item {
   id: string;
@@ -226,6 +228,13 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         ],
       },
       { id: 'api-health', label: 'API Health', icon: 'Activity', kind: 'tab' },
+      {
+        id: 'system-testing',
+        label: 'System Testing',
+        icon: 'FlaskConical',
+        kind: 'tab',
+        title: 'Redis, database pooler, billing safety, LiveKit, and realtime diagnostics',
+      },
       { id: 'email', label: 'Email', icon: 'Mail', kind: 'tab' },
     ],
   },

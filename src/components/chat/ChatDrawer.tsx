@@ -60,6 +60,7 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
     currentUser,
     chatMessages,
     sendMessage,
+    loadOlderMessages,
     friends,
     addFriend,
     removeFriend,
@@ -98,13 +99,39 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
     progress: number;
   } | null>(null);
   const [expandedImageModalUrl, setExpandedImageModalUrl] = useState<string | null>(null);
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
+  const [hasMoreHistory, setHasMoreHistory] = useState(true);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const gearMenuRef = useRef<HTMLDivElement>(null);
+  const threadScrollRef = useRef<HTMLDivElement>(null);
 
   // Sync activeChatUserId if userId prop changes
   useEffect(() => {
     setActiveChatUserId(userId);
   }, [userId]);
+
+  // Reset cursor when switching threads; pull first durable page if local cache is thin
+  useEffect(() => {
+    setHistoryCursor(null);
+    setHasMoreHistory(true);
+    if (!activeChatUserId || !currentUser?.id) return;
+    let cancelled = false;
+    (async () => {
+      setIsLoadingHistory(true);
+      try {
+        const { nextCursor, loaded } = await loadOlderMessages(activeChatUserId, null);
+        if (cancelled) return;
+        setHistoryCursor(nextCursor);
+        setHasMoreHistory(Boolean(nextCursor) && loaded > 0);
+      } finally {
+        if (!cancelled) setIsLoadingHistory(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChatUserId, currentUser?.id]);
 
   // Mark chat as read when opening a specific conversation
   useEffect(() => {
@@ -112,6 +139,28 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
       markChatAsRead(activeChatUserId);
     }
   }, [activeChatUserId, chatMessages]);
+
+  const handleThreadScroll = async (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollTop > 48 || !hasMoreHistory || isLoadingHistory || !activeChatUserId || !historyCursor) {
+      return;
+    }
+    const prevHeight = el.scrollHeight;
+    setIsLoadingHistory(true);
+    try {
+      const { nextCursor, loaded } = await loadOlderMessages(activeChatUserId, historyCursor);
+      setHistoryCursor(nextCursor);
+      setHasMoreHistory(Boolean(nextCursor) && loaded > 0);
+      requestAnimationFrame(() => {
+        if (threadScrollRef.current) {
+          const delta = threadScrollRef.current.scrollHeight - prevHeight;
+          threadScrollRef.current.scrollTop = Math.max(0, delta);
+        }
+      });
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
 
   // Close gear menu when clicking outside
   useEffect(() => {
@@ -970,8 +1019,18 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
               </div>
             )}
 
-            {/* Message History Stream */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {/* Message History Stream — cursor pages load on scroll-up */}
+            <div
+              ref={threadScrollRef}
+              onScroll={handleThreadScroll}
+              className="flex-1 overflow-y-auto p-4 space-y-3"
+            >
+              {isLoadingHistory && (
+                <div className="flex justify-center py-2 text-[10px] font-mono text-slate-500">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                  Loading earlier messages…
+                </div>
+              )}
               {conversation.length === 0 ? (
                 <div className="text-center py-12 text-slate-500 font-mono text-xs space-y-2">
                   <Sparkles className="w-8 h-8 text-slate-600 mx-auto" />

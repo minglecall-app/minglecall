@@ -307,28 +307,68 @@ export function mapDbMessageToChatMessage(db: DbMessage): ChatMessage {
 // PROFILES API (High-Performance Modular Data Queries)
 // ============================================================================
 
-export async function fetchProfilesFromSupabase(filterRole?: string): Promise<UserProfile[] | null> {
+const DISCOVERY_PAGE_SIZE = 50;
+const DISCOVERY_MAX_PAGES = 10; // hard cap: 500 profiles per sync
+
+/** One discovery page — cursor is the last row's created_at (DESC). */
+export async function fetchProfilesPageFromSupabase(opts?: {
+  filterRole?: string;
+  cursor?: string | null;
+  limit?: number;
+}): Promise<{ profiles: UserProfile[]; nextCursor: string | null } | null> {
   if (!isSupabaseConfigured()) return null;
 
+  const limit = Math.min(Math.max(Number(opts?.limit) || DISCOVERY_PAGE_SIZE, 1), DISCOVERY_PAGE_SIZE);
   try {
     let query = supabase
       .from('profiles')
       .select('*')
       // Treat NULL is_banned as not banned (eq.false alone drops legacy/null rows)
       .or('is_banned.eq.false,is_banned.is.null')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(limit);
 
-    if (filterRole) {
-      query = query.eq('role', filterRole);
+    if (opts?.filterRole) {
+      query = query.eq('role', opts.filterRole);
+    }
+    if (opts?.cursor) {
+      query = query.lt('created_at', opts.cursor);
     }
 
     const { data, error } = await query;
     if (error) {
-      console.warn('Supabase fetchProfiles error:', error.message);
+      console.warn('Supabase fetchProfilesPage error:', error.message);
       return null;
     }
 
-    return (data || []).map(mapDbProfileToUserProfile);
+    const profiles = (data || []).map(mapDbProfileToUserProfile);
+    const nextCursor =
+      profiles.length === limit ? profiles[profiles.length - 1]?.createdAt || null : null;
+    return { profiles, nextCursor };
+  } catch (err) {
+    console.warn('Supabase fetchProfilesPage exception:', err);
+    return null;
+  }
+}
+
+/**
+ * Discovery/directory hydrate — cursor pages of 50 (never an unbounded select *).
+ * Caps at DISCOVERY_MAX_PAGES to protect PostgREST under concurrency.
+ */
+export async function fetchProfilesFromSupabase(filterRole?: string): Promise<UserProfile[] | null> {
+  if (!isSupabaseConfigured()) return null;
+
+  try {
+    const all: UserProfile[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < DISCOVERY_MAX_PAGES; page++) {
+      const batch = await fetchProfilesPageFromSupabase({ filterRole, cursor, limit: DISCOVERY_PAGE_SIZE });
+      if (!batch) return all.length ? all : null;
+      all.push(...batch.profiles);
+      if (!batch.nextCursor) break;
+      cursor = batch.nextCursor;
+    }
+    return all;
   } catch (err) {
     console.warn('Supabase fetchProfiles exception:', err);
     return null;
@@ -624,6 +664,7 @@ export async function updateUserStatusInSupabase(
         ? 'offline'
         : 'online';
 
+  // Presence leases live in Redis only — never fall back to profiles.last_seen_at
   try {
     const res = await authFetch('/api/presence/heartbeat', {
       method: 'POST',
@@ -633,23 +674,9 @@ export async function updateUserStatusInSupabase(
         status: normalized,
       }),
     });
-    if (res.ok) return true;
-  } catch (e) {
-    console.warn('presence heartbeat status update failed:', e);
-  }
-
-  try {
-    const res = await authFetch('/api/supabase/update-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId,
-        status: normalized,
-      }),
-    });
     return res.ok;
   } catch (e) {
-    console.warn('update-status fallback failed:', e);
+    console.warn('presence heartbeat status update failed:', e);
     return false;
   }
 }
@@ -1207,29 +1234,46 @@ export async function deleteMatchFromSupabase(userAId: string, userBId: string):
 // MESSAGES API (Paginated & Indexed Conversation Threads)
 // ============================================================================
 
+/**
+ * Conversation page — newest-first cursor (`created_at < cursor`), max 50.
+ * Returns chronological ascending for UI after reversing the DESC page.
+ */
 export async function fetchConversationMessages(
   userId1: string,
   userId2: string,
-  limit: number = 50
-): Promise<ChatMessage[] | null> {
+  limit: number = 40,
+  cursor?: string | null
+): Promise<{ messages: ChatMessage[]; nextCursor: string | null } | null> {
   if (!isSupabaseConfigured()) return null;
 
+  const pageSize = Math.min(Math.max(Number(limit) || 40, 1), 50);
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('messages')
       .select('*')
       .or(
         `and(sender_id.eq.${userId1},receiver_id.eq.${userId2}),and(sender_id.eq.${userId2},receiver_id.eq.${userId1})`
       )
-      .order('created_at', { ascending: true })
-      .limit(limit);
+      .order('created_at', { ascending: false })
+      .limit(pageSize);
+
+    if (cursor) {
+      query = query.lt('created_at', cursor);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.warn('Supabase fetchConversation error:', error.message);
       return null;
     }
 
-    return (data || []).map(mapDbMessageToChatMessage);
+    const newestFirst = (data || []).map(mapDbMessageToChatMessage);
+    const nextCursor =
+      newestFirst.length === pageSize
+        ? newestFirst[newestFirst.length - 1]?.createdAt || null
+        : null;
+    return { messages: newestFirst.slice().reverse(), nextCursor };
   } catch (err) {
     console.warn('Supabase fetchConversation exception:', err);
     return null;
@@ -1239,24 +1283,26 @@ export async function fetchConversationMessages(
 /** Recent messages for a user across all conversations (authoritative hydrate; not localStorage). */
 export async function fetchRecentMessagesForUser(
   userId: string,
-  limit: number = 500
+  limit: number = 50
 ): Promise<ChatMessage[] | null> {
   if (!isSupabaseConfigured() || !userId) return null;
 
+  const pageSize = Math.min(Math.max(Number(limit) || 50, 1), 50);
   try {
     const { data, error } = await supabase
       .from('messages')
       .select('*')
       .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
-      .order('created_at', { ascending: true })
-      .limit(limit);
+      .order('created_at', { ascending: false })
+      .limit(pageSize);
 
     if (error) {
       console.warn('Supabase fetchRecentMessagesForUser error:', error.message);
       return null;
     }
 
-    const mapped = (data || []).map(mapDbMessageToChatMessage);
+    // Newest-first page → chronological ascending for UI
+    const mapped = (data || []).map(mapDbMessageToChatMessage).reverse();
 
     // Soft-hide: apply per-conversation clear watermarks for this user
     const { data: clears, error: clearErr } = await supabase
@@ -1364,81 +1410,174 @@ export function subscribeToFriendRequests(
   };
 }
 
+/**
+ * Targeted chat inbox: Realtime Broadcast on `user:{userId}` (event `chat`).
+ * Reconnects once on CHANNEL_ERROR / TIMED_OUT. Optional postgres_changes UPDATE
+ * remains as a thin read-receipt fallback (no table-wide INSERT fan-out).
+ */
 export function subscribeToRealtimeChat(
   userId: string,
   onNewMessage: (msg: ChatMessage) => void,
   onMessageUpdate?: (msg: ChatMessage) => void
 ) {
-  if (!isSupabaseConfigured()) return () => { };
+  if (!isSupabaseConfigured() || !userId) return () => {};
 
-  const channel = supabase
-    .channel(`chat_user_${userId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'messages',
-        filter: `receiver_id=eq.${userId}`,
-      },
-      (payload) => {
-        const raw = payload.new as DbMessage;
-        if (raw) {
-          onNewMessage(mapDbMessageToChatMessage(raw));
-        }
+  let disposed = false;
+  let channel: ReturnType<typeof supabase.channel> | null = null;
+  let updateChannel: ReturnType<typeof supabase.channel> | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryCount = 0;
+
+  const handlePayload = (payload: any) => {
+    const type = String(payload?.type || '');
+    const msg = payload?.message;
+    if (!msg || typeof msg !== 'object') return;
+    const normalized: ChatMessage = {
+      id: String(msg.id || ''),
+      senderId: String(msg.senderId || msg.sender_id || ''),
+      receiverId: String(msg.receiverId || msg.receiver_id || ''),
+      text: String(msg.text || ''),
+      originalLanguage: String(msg.originalLanguage || msg.original_language || 'English'),
+      mediaUrl: msg.mediaUrl || msg.media_url || undefined,
+      type: (msg.type || 'text') as ChatMessage['type'],
+      isRead: Boolean(msg.isRead ?? msg.is_read),
+      createdAt: msg.createdAt || msg.created_at || msg.timestamp || new Date().toISOString(),
+      timestamp: msg.timestamp || msg.createdAt || msg.created_at || new Date().toISOString(),
+      clientTempId: msg.clientTempId || undefined,
+    };
+    if (!normalized.id || !normalized.senderId || !normalized.receiverId) return;
+    if (type === 'chat:update') {
+      onMessageUpdate?.(normalized);
+      return;
+    }
+    // chat:message (default)
+    onNewMessage(normalized);
+  };
+
+  const attach = () => {
+    if (disposed) return;
+    if (channel) {
+      try {
+        supabase.removeChannel(channel);
+      } catch {
+        /* ignore */
       }
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'messages',
-        filter: `sender_id=eq.${userId}`,
-      },
-      (payload) => {
-        // Multi-device: sender's other sessions also receive the durable insert
-        const raw = payload.new as DbMessage;
-        if (raw) {
-          onNewMessage(mapDbMessageToChatMessage(raw));
-        }
+      channel = null;
+    }
+
+    const inbox = supabase.channel(`user:${userId}`, {
+      config: { broadcast: { self: true } },
+    });
+    inbox.on('broadcast', { event: 'chat' }, ({ payload }) => {
+      try {
+        handlePayload(payload);
+      } catch (err) {
+        console.warn('[subscribeToRealtimeChat] broadcast handler', err);
       }
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'messages',
-        filter: `receiver_id=eq.${userId}`,
-      },
-      (payload) => {
-        const raw = payload.new as DbMessage;
-        if (raw && onMessageUpdate) {
-          onMessageUpdate(mapDbMessageToChatMessage(raw));
-        }
+    });
+
+    channel = inbox;
+    inbox.subscribe((status) => {
+      if (disposed) return;
+      if (status === 'SUBSCRIBED') {
+        retryCount = 0;
+        return;
       }
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'messages',
-        filter: `sender_id=eq.${userId}`,
-      },
-      (payload) => {
-        const raw = payload.new as DbMessage;
-        if (raw && onMessageUpdate) {
-          onMessageUpdate(mapDbMessageToChatMessage(raw));
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        if (retryCount >= 2) {
+          console.warn('[subscribeToRealtimeChat] inbox channel failed after retries');
+          return;
         }
+        retryCount += 1;
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => {
+          console.warn('[subscribeToRealtimeChat] reconnecting user inbox…');
+          attach();
+        }, 800 * retryCount);
       }
-    )
-    .subscribe();
+    });
+
+    // Narrow UPDATE feed for read receipts only (not INSERT delivery)
+    if (onMessageUpdate && !updateChannel) {
+      updateChannel = supabase
+        .channel(`chat_read_${userId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'messages',
+            filter: `receiver_id=eq.${userId}`,
+          },
+          (payload) => {
+            const raw = payload.new as DbMessage;
+            if (raw) onMessageUpdate(mapDbMessageToChatMessage(raw));
+          }
+        )
+        .subscribe();
+    }
+  };
+
+  attach();
 
   return () => {
-    supabase.removeChannel(channel);
+    disposed = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    if (channel) {
+      try {
+        supabase.removeChannel(channel);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (updateChannel) {
+      try {
+        supabase.removeChannel(updateChannel);
+      } catch {
+        /* ignore */
+      }
+    }
   };
+}
+
+/** Load one conversation page (cursor = older than created_at). Prefers API, falls back to direct query. */
+export async function loadConversationHistoryPage(
+  selfUserId: string,
+  otherUserId: string,
+  opts?: { cursor?: string | null; limit?: number }
+): Promise<{ messages: ChatMessage[]; nextCursor: string | null } | null> {
+  const self = String(selfUserId || '').trim();
+  const other = String(otherUserId || '').trim();
+  if (!self || !other) return null;
+  const limit = Math.min(Math.max(Number(opts?.limit) || 40, 1), 50);
+  const cursor = opts?.cursor ? String(opts.cursor) : '';
+
+  try {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (cursor) qs.set('cursor', cursor);
+    const { authFetch } = await import('../utils/apiClient');
+    const res = await authFetch(
+      `/api/messages/conversation/${encodeURIComponent(other)}?${qs.toString()}`
+    );
+    if (res.ok) {
+      const json = await res.json().catch(() => null);
+      if (json?.success && Array.isArray(json.messages)) {
+        const messages = (json.messages as any[]).map((row) =>
+          row.senderId
+            ? (row as ChatMessage)
+            : mapDbMessageToChatMessage(row as DbMessage)
+        );
+        return {
+          messages,
+          nextCursor: typeof json.nextCursor === 'string' ? json.nextCursor : null,
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('[loadConversationHistoryPage] API note:', e);
+  }
+
+  return fetchConversationMessages(self, other, limit, cursor || null);
 }
 
 // ============================================================================

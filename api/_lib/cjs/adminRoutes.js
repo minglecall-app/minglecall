@@ -21,6 +21,7 @@ const {
   isSmtpConfigured,
 } = require('./helpers');
 const { granularResetDb, isFactoryResetAllowed } = require('./granularResetDb');
+const { listServerDiagnosticModules, runServerDiagnostic } = require('./systemDiagnostics');
 
 function livekitEnv() {
   return {
@@ -143,6 +144,48 @@ async function handleAdmin(path, req, res) {
   if (path === 'admin/api-health') {
     // handled in router.js — leave null so router inline can catch, or handle here
     return null;
+  }
+
+  if (path === 'admin/system-diagnostics') {
+    if (req.method === 'OPTIONS') {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+    if (req.method !== 'POST') {
+      return send(res, 405, {
+        success: false,
+        error: { message: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' },
+      });
+    }
+    const auth = await requireAdmin(req);
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const body = (await readJsonBody(req)) || {};
+    const moduleId = String(body.moduleId || '').trim();
+    try {
+      const result = await runServerDiagnostic(moduleId, {
+        profileId: auth.profileId,
+        channel: body.channel,
+        nonce: body.nonce,
+        token: body.token,
+      });
+      if (!result) {
+        return send(res, 400, {
+          success: false,
+          error: {
+            message: `Unknown diagnostic module. Known: ${listServerDiagnosticModules().join(', ')}`,
+            code: 'UNKNOWN_MODULE',
+          },
+        });
+      }
+      return send(res, 200, { success: true, data: result });
+    } catch (err) {
+      console.error('[system-diagnostics]', moduleId, (err && err.message) || err);
+      return send(res, 500, {
+        success: false,
+        error: { message: 'Diagnostic failed', code: 'DIAGNOSTIC_FAILED' },
+      });
+    }
   }
 
   if (path === 'admin/infra-config' && (req.method === 'GET' || req.method === 'POST')) {

@@ -15,6 +15,7 @@ const {
 } = require('./helpers');
 const {
   isRedisConfigured,
+  isRedisUnavailableError,
   setPresence,
   deletePresence,
   mgetPresence,
@@ -247,25 +248,50 @@ async function handlePresence(path, req, res) {
   if (req.method === 'GET') {
     const auth = await requireAuth(req);
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    if (!isRedisConfigured()) {
+      return send(res, 503, {
+        success: false,
+        error: {
+          message: 'Presence service unavailable — Redis is not configured',
+          code: 'REDIS_UNAVAILABLE',
+        },
+      });
+    }
     const bodyIds = Array.isArray(req.query && req.query.ids)
       ? req.query.ids
       : String((req.query && req.query.ids) || '')
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
-    if (isRedisConfigured() && bodyIds.length) {
-      const presence = await mgetPresence(bodyIds);
+    try {
+      const presence = bodyIds.length ? await mgetPresence(bodyIds) : {};
       return send(res, 200, { success: true, presence, source: 'redis' });
+    } catch (err) {
+      return send(res, 503, {
+        success: false,
+        error: {
+          message: (err && err.message) || 'Redis presence read failed',
+          code: 'REDIS_UNAVAILABLE',
+        },
+      });
     }
-    // Fallback for clients that still expect a map (capped; prefer Redis + ids)
-    const presence = await buildPresenceMap(auth.client);
-    return send(res, 200, { success: true, presence, source: 'db_fallback' });
   }
   if (req.method !== 'POST' && req.method !== 'PUT') {
     return send(res, 405, { success: false, error: 'Method not allowed' });
   }
   const auth = await requireAuth(req);
   if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+
+  if (!isRedisConfigured()) {
+    return send(res, 503, {
+      success: false,
+      error: {
+        message: 'Presence service unavailable — Redis is not configured',
+        code: 'REDIS_UNAVAILABLE',
+      },
+    });
+  }
+
   const body = await readJsonBody(req);
   const status = String((body && body.status) || 'online').toLowerCase();
   if (!['online', 'offline', 'busy', 'in_call'].includes(status)) {
@@ -274,8 +300,8 @@ async function handlePresence(path, req, res) {
       error: 'status must be online, busy, or offline',
     });
   }
+  // Call-log cleanup on explicit offline / clearCalls only — never writes last_seen_at
   const clearCalls = Boolean(body && body.clearCalls) || status === 'offline';
-  const durableWrite = Boolean(body && body.durable) || status === 'offline' || clearCalls;
   if (clearCalls) {
     await closeOpenCallLogsForUsers(
       auth.client,
@@ -293,8 +319,7 @@ async function handlePresence(path, req, res) {
     writeStatus = 'online';
   }
 
-  // Redis lease for routine heartbeats (no Postgres write)
-  if (isRedisConfigured()) {
+  try {
     if (writeStatus === 'offline') {
       await deletePresence(auth.profileId);
       if (auth.userId) await deletePresence(String(auth.userId));
@@ -304,27 +329,26 @@ async function handlePresence(path, req, res) {
         await setPresence(String(auth.userId), writeStatus);
       }
     }
-  }
-
-  // Durable Postgres write only on login/logout / explicit durable flag
-  if (durableWrite || !isRedisConfigured()) {
-    const nowIso = new Date().toISOString();
-    await auth.client
-      .from('profiles')
-      .update({
-        online_status: writeStatus,
-        last_seen_at: nowIso,
-        updated_at: nowIso,
-      })
-      .eq('id', auth.profileId);
+  } catch (err) {
+    return send(res, 503, {
+      success: false,
+      error: {
+        message: (err && err.message) || 'Redis presence write failed',
+        code: 'REDIS_UNAVAILABLE',
+      },
+    });
   }
 
   const peerIds = Array.isArray(body && body.peerIds)
     ? body.peerIds.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 200)
     : [];
   let presence = {};
-  if (isRedisConfigured() && peerIds.length) {
-    presence = await mgetPresence(peerIds);
+  try {
+    if (peerIds.length) {
+      presence = await mgetPresence(peerIds);
+    }
+  } catch (_) {
+    /* best-effort peer map */
   }
   presence[auth.profileId] = writeStatus === 'offline' ? 'offline' : writeStatus;
   if (auth.userId) presence[String(auth.userId)] = presence[auth.profileId];
@@ -334,7 +358,7 @@ async function handlePresence(path, req, res) {
     userId: auth.profileId,
     status: writeStatus,
     presence,
-    redis: isRedisConfigured(),
+    redis: true,
   });
 }
 
@@ -441,6 +465,16 @@ async function handleMessages(path, req, res) {
       timestamp: data.created_at,
       clientTempId: clientTempId || undefined,
     };
+    // Persist-first then targeted Realtime Broadcast (user + conversation topics)
+    try {
+      const { broadcastChatMessage } = require('./realtimeBroadcast');
+      await broadcastChatMessage(client, mapped, [auth.profileId, receiverId]);
+    } catch (broadcastErr) {
+      console.warn(
+        '[api/messages] realtime broadcast failed (message still durable)',
+        broadcastErr && broadcastErr.message
+      );
+    }
     // Match Express contract: { success, data: { message } }
     return send(res, 201, {
       success: true,
@@ -480,29 +514,43 @@ async function handleMessages(path, req, res) {
     } catch (_) {
       /* table may be missing in older DBs */
     }
+    const cursor = String((req.query && req.query.cursor) || '').trim();
+    let limit = Number((req.query && req.query.limit) || 40);
+    if (!Number.isFinite(limit) || limit <= 0) limit = 40;
+    limit = Math.min(Math.floor(limit), 50);
+
     let q = client
       .from('messages')
       .select('*')
       .or(
         `and(sender_id.eq.${auth.profileId},receiver_id.eq.${otherUserId}),and(sender_id.eq.${otherUserId},receiver_id.eq.${auth.profileId})`
       )
-      .order('created_at', { ascending: true })
-      .limit(200);
+      .order('created_at', { ascending: false })
+      .limit(limit);
     if (clearedAt) q = q.gt('created_at', clearedAt);
+    if (cursor) q = q.lt('created_at', cursor);
     const { data, error } = await q;
     if (error) return send(res, 500, { success: false, error: { message: error.message } });
-    const messages = (data || []).map((row) => ({
-      id: row.id,
-      senderId: row.sender_id,
-      receiverId: row.receiver_id,
-      text: row.text || '',
-      mediaUrl: row.media_url || undefined,
-      type: row.type,
-      isRead: Boolean(row.is_read),
-      createdAt: row.created_at,
-      timestamp: row.created_at,
-    }));
-    return send(res, 200, { success: true, messages });
+    const newestFirst = data || [];
+    const nextCursor =
+      newestFirst.length === limit
+        ? newestFirst[newestFirst.length - 1] && newestFirst[newestFirst.length - 1].created_at
+        : null;
+    const messages = newestFirst
+      .slice()
+      .reverse()
+      .map((row) => ({
+        id: row.id,
+        senderId: row.sender_id,
+        receiverId: row.receiver_id,
+        text: row.text || '',
+        mediaUrl: row.media_url || undefined,
+        type: row.type,
+        isRead: Boolean(row.is_read),
+        createdAt: row.created_at,
+        timestamp: row.created_at,
+      }));
+    return send(res, 200, { success: true, messages, nextCursor, pageSize: limit });
   }
 
   if (path.startsWith('messages/conversation/') && req.method === 'DELETE') {
@@ -717,42 +765,34 @@ async function handleCalls(path, req, res) {
       });
     }
 
-    // Authoritative presence via Redis when configured; durable DB only on end/login paths
+    // Call presence leases live in Redis only (no profiles.last_seen_at on sync)
     try {
-      if (isRedisConfigured()) {
-        if (callStatus === 'ringing') {
-          await setPresence(callerId, 'busy');
-          await setCallState(callId, {
-            callerId,
-            receiverId,
-            status: callStatus,
-            startedAt: startedAt || null,
-          });
-        } else if (busyStatuses.has(callStatus)) {
-          await setPresence(callerId, 'busy');
-          if (receiverId) await setPresence(receiverId, 'busy');
-          await setCallState(callId, {
-            callerId,
-            receiverId,
-            status: callStatus,
-            startedAt: startedAt || null,
-          });
-        } else if (endStatuses.has(callStatus)) {
-          await setPresence(callerId, 'online');
-          if (receiverId) await setPresence(receiverId, 'online');
-          await deleteCallState(callId);
-          // One durable last_seen transition on call end
-          await setProfilesOnlineStatus(auth.client, [callerId, receiverId], 'online');
-        }
+      if (!isRedisConfigured()) {
+        console.warn('[api/calls/sync] Redis not configured — skipping presence lease update');
       } else if (callStatus === 'ringing') {
-        await setProfilesOnlineStatus(auth.client, [callerId], 'busy');
+        await setPresence(callerId, 'busy');
+        await setCallState(callId, {
+          callerId,
+          receiverId,
+          status: callStatus,
+          startedAt: startedAt || null,
+        });
       } else if (busyStatuses.has(callStatus)) {
-        await setProfilesOnlineStatus(auth.client, [callerId, receiverId], 'busy');
+        await setPresence(callerId, 'busy');
+        if (receiverId) await setPresence(receiverId, 'busy');
+        await setCallState(callId, {
+          callerId,
+          receiverId,
+          status: callStatus,
+          startedAt: startedAt || null,
+        });
       } else if (endStatuses.has(callStatus)) {
-        await setProfilesOnlineStatus(auth.client, [callerId, receiverId], 'online');
+        await setPresence(callerId, 'online');
+        if (receiverId) await setPresence(receiverId, 'online');
+        await deleteCallState(callId);
       }
     } catch (e) {
-      console.warn('[api/calls/sync] presence update failed', e && e.message);
+      console.warn('[api/calls/sync] Redis presence update failed', e && e.message);
     }
 
     return send(res, 200, { success: true, callId, presenceUpdated: true, status: callStatus });
@@ -1087,6 +1127,57 @@ async function handleCalls(path, req, res) {
   return send(res, 405, { success: false, error: 'Method not allowed' });
 }
 
+/** Server-only gift catalog costs — never trust body.coinCost / body.cost */
+const SERVER_GIFT_CATALOG = {
+  g_rose: 10,
+  g_heart: 50,
+  g_ring: 200,
+  g_crown: 500,
+  g_car: 1000,
+  g_yacht: 2500,
+  g_rocket: 5000,
+};
+
+async function resolveServerGiftCost(client, giftId) {
+  const id = String(giftId || '').trim();
+  if (!id) return 0;
+
+  try {
+    const { data: giftRow } = await client
+      .from('virtual_gifts')
+      .select('id, coin_cost, cost, is_active')
+      .or(`id.eq.${id},slug.eq.${id}`)
+      .maybeSingle();
+    if (giftRow && giftRow.is_active !== false) {
+      const c = Math.round(Number(giftRow.coin_cost || giftRow.cost) || 0);
+      if (c > 0) return c;
+    }
+  } catch (_) {
+    /* table may be missing */
+  }
+
+  try {
+    const { data: cfg } = await client
+      .from('system_configs')
+      .select('virtual_gifts_json')
+      .eq('id', 'default')
+      .maybeSingle();
+    const raw = cfg && cfg.virtual_gifts_json;
+    if (raw) {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (Array.isArray(parsed)) {
+        const g = parsed.find((x) => x && String(x.id) === id && x.isActive !== false);
+        const c = Math.round(Number(g && g.coinCost) || 0);
+        if (c > 0) return c;
+      }
+    }
+  } catch (_) {
+    /* ignore */
+  }
+
+  return Math.round(Number(SERVER_GIFT_CATALOG[id]) || 0);
+}
+
 async function handleGifts(path, req, res) {
   if (path !== 'gifts/send') return null;
   if (req.method !== 'POST') return send(res, 405, { success: false, error: 'Method not allowed' });
@@ -1100,49 +1191,88 @@ async function handleGifts(path, req, res) {
       return send(res, 400, { success: false, error: 'Invalid gift.' });
     }
 
-    // Prefer server catalog cost; never trust client as sole authority
-    let cost = 0;
-    const { data: giftRow } = await auth.client
-      .from('virtual_gifts')
-      .select('id, coin_cost, cost')
-      .or(`id.eq.${giftId},slug.eq.${giftId}`)
-      .maybeSingle();
-    if (giftRow) {
-      cost = Math.max(1, Math.round(Number(giftRow.coin_cost || giftRow.cost) || 0));
+    // Reject client-supplied money fields
+    if (
+      body &&
+      (body.coinCost != null ||
+        body.cost != null ||
+        body.coins != null ||
+        body.amount != null ||
+        body.hostCoinsEarned != null ||
+        body.tlCoinsEarned != null)
+    ) {
+      return send(res, 400, {
+        success: false,
+        error: {
+          message: 'Client must not supply coin amounts; gift prices are server-derived.',
+          code: 'CLIENT_AMOUNTS_FORBIDDEN',
+        },
+      });
     }
-    if (!cost) {
-      // Fallback when catalog table missing — clamp client hint
-      const hinted = Math.round(Number((body && (body.coinCost || body.cost)) || 0));
-      cost = hinted > 0 && hinted <= 50000 ? hinted : 10;
+
+    const cost = await resolveServerGiftCost(auth.client, giftId);
+    if (!cost || cost <= 0) {
+      return send(res, 400, {
+        success: false,
+        error: { message: 'Unknown or inactive gift', code: 'INVALID_GIFT' },
+      });
     }
 
     const { data: cfg } = await auth.client
       .from('system_configs')
-      .select('female_host_share_percent')
+      .select('gift_female_host_share_percent, female_host_share_percent, gift_team_leader_share_percent')
       .eq('id', 'default')
       .maybeSingle();
     const hostSharePercent = Math.min(
       100,
-      Math.max(0, Math.round(Number(cfg?.female_host_share_percent) || 30))
+      Math.max(
+        0,
+        Math.round(
+          Number(cfg?.gift_female_host_share_percent ?? cfg?.female_host_share_percent) || 30
+        )
+      )
     );
-    const hostShare = Math.floor(cost * (hostSharePercent / 100));
+    const tlSharePercent = Math.min(
+      100,
+      Math.max(0, Math.round(Number(cfg?.gift_team_leader_share_percent) || 10))
+    );
 
     const { data: receiver } = await auth.client
       .from('profiles')
       .select('id, earnings_coins, role, team_leader_id, created_by_id')
       .eq('id', receiverId)
       .maybeSingle();
-    const tlId =
+    const isCreator =
       receiver &&
-      (receiver.role === 'female_creator' || receiver.role === 'female_host')
-        ? String(receiver.team_leader_id || receiver.created_by_id || '')
-        : '';
-    // Stable idempotency — never Date.now(); prefer client key or gift+message id
-    const idempotencyKey = String(
-      (body && (body.idempotencyKey || body.clientTempId)) || `gift:${auth.profileId}:${giftId}:${receiverId}:${cost}`
-    )
+      (receiver.role === 'female_creator' || receiver.role === 'female_host');
+    const tlId = isCreator
+      ? String(receiver.team_leader_id || receiver.created_by_id || '')
+      : '';
+    let hostShare = isCreator ? Math.floor(cost * (hostSharePercent / 100)) : 0;
+    let tlShare =
+      isCreator && tlId ? Math.floor(cost * (tlSharePercent / 100)) : 0;
+    if (hostShare + tlShare > cost) {
+      if (tlShare > cost) {
+        tlShare = cost;
+        hostShare = 0;
+      } else {
+        hostShare = cost - tlShare;
+      }
+    }
+
+    // Idempotency key required so retries do not double-spend and repeats stay unique
+    const idempotencyKey = String((body && (body.idempotencyKey || body.clientTempId)) || '')
       .trim()
       .slice(0, 200);
+    if (!idempotencyKey) {
+      return send(res, 400, {
+        success: false,
+        error: {
+          message: 'idempotencyKey or clientTempId is required',
+          code: 'IDEMPOTENCY_REQUIRED',
+        },
+      });
+    }
 
     const { data: rpcRaw, error: rpcErr } = await auth.client.rpc('gift_spend_atomic', {
       p_sender_id: auth.profileId,
@@ -1150,9 +1280,9 @@ async function handleGifts(path, req, res) {
       p_tl_id: tlId || null,
       p_coins: cost,
       p_host_coins: hostShare,
-      p_tl_coins: 0,
+      p_tl_coins: tlShare,
       p_idempotency_key: idempotencyKey,
-      p_metadata: { giftId, receiverId, kind: 'gift' },
+      p_metadata: { giftId, receiverId, kind: 'gift', cost },
     });
     if (rpcErr) {
       console.error('[api/gifts/send] RPC error:', rpcErr.message);

@@ -64,20 +64,29 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       return sendJson(res, 500, { success: false, error: { message: error.message } });
     }
 
+    const message = {
+      id: data.id,
+      senderId: data.sender_id,
+      receiverId: data.receiver_id,
+      text: data.text || '',
+      mediaUrl: data.media_url || undefined,
+      type: data.type,
+      isRead: Boolean(data.is_read),
+      createdAt: data.created_at,
+      timestamp: data.created_at,
+      clientTempId: clientTempId || undefined,
+    };
+
+    try {
+      const { broadcastChatMessage } = await import('../../../../lib/realtimeBroadcast');
+      await broadcastChatMessage(client, message, [auth.profileId, receiverId]);
+    } catch (e: any) {
+      console.warn('[messages] realtime broadcast failed (durable ok)', e?.message);
+    }
+
     return sendJson(res, 200, {
       success: true,
-      message: {
-        id: data.id,
-        senderId: data.sender_id,
-        receiverId: data.receiver_id,
-        text: data.text || '',
-        mediaUrl: data.media_url || undefined,
-        type: data.type,
-        isRead: Boolean(data.is_read),
-        createdAt: data.created_at,
-        timestamp: data.created_at,
-        clientTempId: clientTempId || undefined,
-      },
+      message,
     });
   }
 
