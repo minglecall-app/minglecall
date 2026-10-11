@@ -55,8 +55,8 @@ There is **no** `conversation_id` column on `messages` today — pair indexes ar
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` or `VITE_SUPABASE_ANON_KEY` | Yes | Anon key (RLS-protected) |
 | `SUPABASE_SERVICE_ROLE_KEY` | **No** | Server-only admin client |
 | `DATABASE_URL` / `SUPABASE_DB_URL` | **No** | Optional; Transaction pooler `:6543` for raw SQL only |
-| `UPSTASH_REDIS_REST_URL` | **No** | Redis REST endpoint |
-| `UPSTASH_REDIS_REST_TOKEN` | **No** | Redis REST token |
+| `UPSTASH_REDIS_REST_URL` or `KV_REST_API_URL` | **No** | Redis REST endpoint. `REDIS_URL` is used only when it is `https://` |
+| `UPSTASH_REDIS_REST_TOKEN` or `KV_REST_API_TOKEN` | **No** | Redis REST token (Upstash name first, then Vercel KV) |
 | `LIVEKIT_URL` | **No** (config may expose URL) | LiveKit WebSocket URL |
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | **No** | Token minting |
 | `R2_*` / SMTP / payment secrets | **No** | Server-only |

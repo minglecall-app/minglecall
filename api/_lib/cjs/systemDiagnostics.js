@@ -6,6 +6,7 @@ const net = require('net');
 const { Redis } = require('@upstash/redis');
 const { TokenVerifier } = require('livekit-server-sdk');
 const { clean, createServiceClient, getPooledDatabaseUrl } = require('./helpers');
+const { getRedisRestCredentials } = require('./redisEnv');
 
 const CHANNEL_RE = /^admin-diag-[A-Za-z0-9_-]{6,64}$/;
 const NONCE_RE = /^[A-Za-z0-9_-]{6,80}$/;
@@ -88,10 +89,13 @@ function redactSecret(message, secret) {
 }
 
 function redisClient() {
-  const url = clean(process.env.UPSTASH_REDIS_REST_URL || '');
-  const token = clean(process.env.UPSTASH_REDIS_REST_TOKEN || '');
+  const { url, token } = getRedisRestCredentials();
   if (!url || !token) return null;
   return new Redis({ url, token });
+}
+
+function activeRedisToken() {
+  return getRedisRestCredentials().token;
 }
 
 async function runRedisFallback(input) {
@@ -106,7 +110,8 @@ async function runRedisFallback(input) {
       label: 'Upstash Redis configuration',
       ok: false,
       latencyMs: 0,
-      detail: 'UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN are not set. Heartbeat returns 503 REDIS_UNAVAILABLE.',
+      detail:
+        'Redis REST credentials are not set. Expected UPSTASH_REDIS_REST_URL/TOKEN or Vercel KV_REST_API_URL/TOKEN. Heartbeat returns 503 REDIS_UNAVAILABLE.',
     });
     return finish('redis-fallback', tAll, steps, 'Redis is not configured, so presence heartbeat must fail closed.');
   }
@@ -118,6 +123,7 @@ async function runRedisFallback(input) {
     await client.set(key, 'ok', { ex: 30 });
     const value = await client.get(key);
     await client.del(key);
+    const creds = getRedisRestCredentials();
     const ok = value === 'ok';
     steps.push({
       id: 'redis-rtt',
@@ -125,10 +131,10 @@ async function runRedisFallback(input) {
       ok,
       latencyMs: elapsed(tPing),
       detail: ok ? 'SET / GET / DEL on a short-lived diagnostic key succeeded' : 'Diagnostic key read did not match',
-      data: { key, ttlSec: 30 },
+      data: { key, ttlSec: 30, urlSource: creds.urlSource, tokenSource: creds.tokenSource },
     });
   } catch (err) {
-    const token = clean(process.env.UPSTASH_REDIS_REST_TOKEN || '');
+    const token = activeRedisToken();
     steps.push({
       id: 'redis-rtt',
       label: 'Upstash Redis round trip',
@@ -153,7 +159,7 @@ async function runRedisFallback(input) {
       data: { status: status || null },
     });
   } catch (err) {
-    const token = clean(process.env.UPSTASH_REDIS_REST_TOKEN || '');
+    const token = activeRedisToken();
     steps.push({
       id: 'presence-read',
       label: 'Presence key read-back',
@@ -164,7 +170,7 @@ async function runRedisFallback(input) {
   }
 
   const tBad = Date.now();
-  const url = clean(process.env.UPSTASH_REDIS_REST_URL || '');
+  const url = getRedisRestCredentials().url;
   try {
     const bad = new Redis({ url, token: 'diagnostic-invalid-token' });
     await bad.get('diag:should-fail');
@@ -176,7 +182,7 @@ async function runRedisFallback(input) {
       detail: 'A bogus Upstash token was accepted. Heartbeat cannot fail closed.',
     });
   } catch (err) {
-    const token = clean(process.env.UPSTASH_REDIS_REST_TOKEN || '');
+    const token = activeRedisToken();
     steps.push({
       id: 'redis-fallback',
       label: 'Invalid-token fallback',

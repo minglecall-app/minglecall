@@ -36,7 +36,7 @@
 
 * Ensure proper external asset domain whitelisting (Cloudflare R2 CDN, Supabase storage).
 
-* Configure environment variables securely on Vercel dashboards (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`).
+* Configure environment variables securely on Vercel dashboards (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `UPSTASH_REDIS_REST_URL` / `KV_REST_API_URL`, `UPSTASH_REDIS_REST_TOKEN` / `KV_REST_API_TOKEN`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`).
 
 ### 3.2 Vercel Function Best Practices
 

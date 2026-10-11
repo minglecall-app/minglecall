@@ -3,14 +3,14 @@
  * Heartbeats write here only — never profiles.last_seen_at / online_status.
  */
 const { Redis } = require('@upstash/redis');
+const { getRedisRestCredentials, REDIS_NOT_CONFIGURED } = require('./redisEnv');
 
 const PRESENCE_TTL_SEC = 75;
 let redis;
 
 function getRedis() {
   if (redis !== undefined) return redis;
-  const url = String(process.env.UPSTASH_REDIS_REST_URL || '').trim();
-  const token = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+  const { url, token } = getRedisRestCredentials();
   if (!url || !token) {
     redis = null;
     return null;
@@ -43,7 +43,7 @@ async function setPresence(userId, status, ttlSec = PRESENCE_TTL_SEC) {
   const client = getRedis();
   if (!client || !userId) {
     throw new RedisUnavailableError(
-      'UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not configured'
+      REDIS_NOT_CONFIGURED
     );
   }
   const s = status === 'busy' || status === 'offline' ? status : 'online';
@@ -59,7 +59,7 @@ async function deletePresence(userId) {
   const client = getRedis();
   if (!client || !userId) {
     throw new RedisUnavailableError(
-      'UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not configured'
+      REDIS_NOT_CONFIGURED
     );
   }
   try {
@@ -74,7 +74,7 @@ async function mgetPresence(userIds) {
   const out = {};
   if (!client) {
     throw new RedisUnavailableError(
-      'UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not configured'
+      REDIS_NOT_CONFIGURED
     );
   }
   const ids = Array.from(

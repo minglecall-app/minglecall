@@ -1,27 +1,51 @@
 /**
  * Upstash Redis — server-only. Never import from client components.
  * Keys: presence:{userId}, profile:{userId}, rate:{userId}:{endpoint}, call:{callId}
+ *
+ * Credential order matches api/_lib/cjs/redisEnv.js:
+ * UPSTASH_REDIS_REST_* , then Vercel KV_REST_API_* , then REDIS_URL when it is https.
  */
 import { Redis } from '@upstash/redis';
 
 let redis: Redis | null | undefined;
 
+const REDIS_NOT_CONFIGURED =
+  'Redis REST credentials are not configured. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN, or KV_REST_API_URL and KV_REST_API_TOKEN.';
+
+function cleanEnv(value: string | undefined): string {
+  return String(value || '')
+    .trim()
+    .replace(/^["']|["']$/g, '');
+}
+
+function httpUrl(value: string | undefined): string {
+  const url = cleanEnv(value);
+  return /^https?:\/\//i.test(url) ? url : '';
+}
+
+/** Same fallback order as api/_lib/cjs/redisEnv.js. */
+export function getRedisRestCredentials(): { url: string; token: string } {
+  const url =
+    httpUrl(process.env.UPSTASH_REDIS_REST_URL) ||
+    httpUrl(process.env.KV_REST_API_URL) ||
+    httpUrl(process.env.REDIS_URL);
+  const token = cleanEnv(process.env.UPSTASH_REDIS_REST_TOKEN) || cleanEnv(process.env.KV_REST_API_TOKEN);
+  return { url, token };
+}
+
 export function isRedisConfigured(): boolean {
-  const url = (process.env.UPSTASH_REDIS_REST_URL || '').trim();
-  const token = (process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+  const { url, token } = getRedisRestCredentials();
   return Boolean(url && token);
 }
 
 export function getRedis(): Redis | null {
   if (redis !== undefined) return redis;
-  if (!isRedisConfigured()) {
+  const { url, token } = getRedisRestCredentials();
+  if (!url || !token) {
     redis = null;
     return null;
   }
-  redis = new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!.trim(),
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!.trim(),
-  });
+  redis = new Redis({ url, token });
   return redis;
 }
 
@@ -63,7 +87,7 @@ export async function setPresence(
 ): Promise<true> {
   const client = getRedis();
   if (!client || !userId) {
-    throw new RedisUnavailableError('UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not configured');
+    throw new RedisUnavailableError(REDIS_NOT_CONFIGURED);
   }
   try {
     await client.set(presenceKey(userId), status, { ex: ttlSec });
@@ -76,7 +100,7 @@ export async function setPresence(
 export async function deletePresence(userId: string): Promise<void> {
   const client = getRedis();
   if (!client || !userId) {
-    throw new RedisUnavailableError('UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not configured');
+    throw new RedisUnavailableError(REDIS_NOT_CONFIGURED);
   }
   try {
     await client.del(presenceKey(userId));
@@ -100,9 +124,7 @@ export async function mgetPresence(
   const client = getRedis();
   const out: Record<string, PresenceStatus> = {};
   if (!client) {
-    throw new RedisUnavailableError(
-      'UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not configured'
-    );
+    throw new RedisUnavailableError(REDIS_NOT_CONFIGURED);
   }
   if (!userIds.length) return out;
   const ids = Array.from(new Set(userIds.map((id) => String(id || '').trim()).filter(Boolean))).slice(
