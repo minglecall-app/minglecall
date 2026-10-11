@@ -2532,11 +2532,11 @@ async function startServer(): Promise<express.Express> {
               start_time: startedAt,
               ended_at: null,
               end_time: null,
-              duration_seconds: Math.max(0, Number(durationSeconds) || 0),
-              coins_spent: Math.max(0, Number(coinsSpent) || 0),
-              coins_earned: Math.max(0, Number(coinsEarned) || 0),
               updated_at: new Date().toISOString(),
             };
+            // Do not write duration/coins here. Active sync runs before every burn
+            // minute; sending 0 used to wipe call_logs and freeze the host badge
+            // at a single minute. Burn owns those columns until hangup.
             let { error } = await client.from('call_logs').upsert(busyPayload as any, { onConflict: 'id' });
             // Older DBs may lack call_logs.updated_at — retry without it so ringing can persist.
             if (

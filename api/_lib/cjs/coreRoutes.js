@@ -241,6 +241,69 @@ async function updateCallLogs(client, patch, applyFilter) {
   return error;
 }
 
+/** Keep the higher billed total when hangup sync races a burn write. */
+function maxCallEconomy(existing, incoming) {
+  return Math.max(Number(existing) || 0, Number(incoming) || 0);
+}
+
+/**
+ * Add this minute onto call_logs.coins_spent / coins_earned.
+ * Retries if another writer changed the row between read and update.
+ */
+async function addCallMinuteTotals(client, callId, addSpent, addEarned, durationFloor, extraPatch) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data: row, error: readErr } = await client
+      .from('call_logs')
+      .select('coins_spent, coins_earned, duration_seconds')
+      .eq('id', callId)
+      .maybeSingle();
+    if (readErr) {
+      lastErr = readErr;
+      break;
+    }
+    const baseSpent = Number(row && row.coins_spent) || 0;
+    const baseEarned = Number(row && row.coins_earned) || 0;
+    const baseDuration = Number(row && row.duration_seconds) || 0;
+    const nextSpent = baseSpent + Math.max(0, Number(addSpent) || 0);
+    const nextEarned = baseEarned + Math.max(0, Number(addEarned) || 0);
+    const nextDuration = Math.max(baseDuration, Math.max(0, Number(durationFloor) || 0));
+    const patch = {
+      ...(extraPatch || {}),
+      coins_spent: nextSpent,
+      coins_earned: nextEarned,
+      duration_seconds: nextDuration,
+    };
+    const writeOnce = async (body) => {
+      const { data, error } = await client
+        .from('call_logs')
+        .update(body)
+        .eq('id', callId)
+        .eq('coins_earned', baseEarned)
+        .eq('coins_spent', baseSpent)
+        .select('coins_spent, coins_earned')
+        .maybeSingle();
+      return { data, error };
+    };
+    let { data, error } = await writeOnce(patch);
+    if (error && isMissingUpdatedAtError(error)) {
+      ({ data, error } = await writeOnce(stripCallLogUpdatedAt(patch)));
+    }
+    if (error) {
+      lastErr = error;
+      break;
+    }
+    if (data) {
+      return {
+        error: null,
+        coinsSpent: Number(data.coins_spent) || nextSpent,
+        coinsEarned: Number(data.coins_earned) || nextEarned,
+      };
+    }
+  }
+  return { error: lastErr, coinsSpent: null, coinsEarned: null };
+}
+
 async function handlePresence(path, req, res) {
   if (path !== 'presence' && path !== 'presence/index' && path !== 'presence/heartbeat') {
     return null;
@@ -738,20 +801,30 @@ async function handleCalls(path, req, res) {
       caller_name: callerName,
       host_name: receiverName,
       status: callStatus,
-      duration_seconds: Number((body && (body.durationSeconds || body.duration)) || 0),
-      coins_spent: Number((body && body.coinsSpent) || 0),
-      coins_earned: Number((body && body.coinsEarned) || 0),
       started_at: startedAt,
       start_time: startedAt,
       updated_at: new Date().toISOString(),
       end_reason: body && body.reason ? String(body.reason).slice(0, 120) : undefined,
     };
     if (endStatuses.has(callStatus)) {
+      // Hangup may send a stale client total. Never lower what burn already stored.
+      const { data: existing } = await auth.client
+        .from('call_logs')
+        .select('coins_spent, coins_earned, duration_seconds')
+        .eq('id', callId)
+        .maybeSingle();
+      payload.duration_seconds = maxCallEconomy(
+        existing && existing.duration_seconds,
+        body && (body.durationSeconds || body.duration)
+      );
+      payload.coins_spent = maxCallEconomy(existing && existing.coins_spent, body && body.coinsSpent);
+      payload.coins_earned = maxCallEconomy(existing && existing.coins_earned, body && body.coinsEarned);
       payload.ended_at = endedAt;
       payload.end_time = endedAt;
       if (!payload.end_reason) payload.end_reason = callStatus;
     } else if (busyStatuses.has(callStatus)) {
-      // Keep call open — never stamp ended_at while ringing/active
+      // Ringing/active heartbeats must not reset per-minute coins or duration.
+      // Those columns are owned by /api/calls/burn while the call is open.
       payload.ended_at = null;
       payload.end_time = null;
     }
@@ -1055,16 +1128,8 @@ async function handleCalls(path, req, res) {
       let callCoinsSpent = Number(callRow.coins_spent) || 0;
       let callCoinsEarned = Number(callRow.coins_earned) || 0;
       if (!isDuplicate) {
-        callCoinsSpent += burned;
-        callCoinsEarned += hostEarned;
         const burnPatch = {
           status: 'active',
-          coins_spent: callCoinsSpent,
-          coins_earned: callCoinsEarned,
-          duration_seconds: Math.max(
-            Number(callRow.duration_seconds) || 0,
-            (billingMinute - 1) * 60
-          ),
           burn_rate_per_min: coinsBurned,
           was_friend_call: isFriendPair,
           team_leader_id: tlId || undefined,
@@ -1073,19 +1138,35 @@ async function handleCalls(path, req, res) {
           updated_at: new Date().toISOString(),
         };
         Object.keys(burnPatch).forEach((k) => burnPatch[k] === undefined && delete burnPatch[k]);
-        let burnUpdateErr = await updateCallLogs(auth.client, burnPatch, (q) => q.eq('id', callId));
-        if (!burnUpdateErr) {
-          const { data: updatedCall } = await auth.client
-            .from('call_logs')
-            .select('coins_spent, coins_earned')
-            .eq('id', callId)
-            .maybeSingle();
-          if (updatedCall) {
-            callCoinsSpent = Number(updatedCall.coins_spent) || callCoinsSpent;
-            callCoinsEarned = Number(updatedCall.coins_earned) || callCoinsEarned;
-          }
+        const added = await addCallMinuteTotals(
+          auth.client,
+          callId,
+          burned,
+          hostEarned,
+          (billingMinute - 1) * 60,
+          burnPatch
+        );
+        if (!added.error && added.coinsSpent != null && added.coinsEarned != null) {
+          callCoinsSpent = added.coinsSpent;
+          callCoinsEarned = added.coinsEarned;
         } else {
-          console.warn('[api/calls/burn] call_logs update', burnUpdateErr.message);
+          console.warn(
+            '[api/calls/burn] call_logs update',
+            (added.error && added.error.message) || 'totals unchanged'
+          );
+          // Still report a cumulative total if the row write lost the race.
+          callCoinsSpent += burned;
+          callCoinsEarned += hostEarned;
+        }
+      } else {
+        const { data: fresh } = await auth.client
+          .from('call_logs')
+          .select('coins_spent, coins_earned')
+          .eq('id', callId)
+          .maybeSingle();
+        if (fresh) {
+          callCoinsSpent = Number(fresh.coins_spent) || callCoinsSpent;
+          callCoinsEarned = Number(fresh.coins_earned) || callCoinsEarned;
         }
       }
 

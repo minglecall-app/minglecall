@@ -2507,6 +2507,13 @@ export async function upsertCallLogAdmin(log: {
           : new Date(log.endTime).toISOString();
 
     const hostId = log.hostId || log.receiverId;
+    const { data: existing } = await client
+      .from('call_logs')
+      .select('duration_seconds, coins_spent, coins_earned, team_leader_earned_coins')
+      .eq('id', String(log.id))
+      .maybeSingle();
+    const keepMax = (current: unknown, incoming: unknown) =>
+      Math.max(Number(current) || 0, Math.max(0, Number(incoming) || 0));
     const payload = {
       id: String(log.id),
       caller_id: String(log.callerId),
@@ -2518,14 +2525,14 @@ export async function upsertCallLogAdmin(log: {
       started_at: startIso,
       end_time: endIso,
       ended_at: endIso,
-      duration_seconds: Math.max(0, Number(log.durationSeconds) || 0),
-      coins_spent: Math.max(0, Number(log.coinsSpent) || 0),
-      coins_earned: Math.max(0, Number(log.coinsEarned) || 0),
+      duration_seconds: keepMax(existing?.duration_seconds, log.durationSeconds),
+      coins_spent: keepMax(existing?.coins_spent, log.coinsSpent),
+      coins_earned: keepMax(existing?.coins_earned, log.coinsEarned),
       was_friend_call: Boolean(log.wasFriendCall),
       status: log.status || 'completed',
       end_reason: log.endReason || log.status || 'completed',
       team_leader_id: log.teamLeaderId || null,
-      team_leader_earned_coins: Math.max(0, Number(log.teamLeaderEarnedCoins) || 0),
+      team_leader_earned_coins: keepMax(existing?.team_leader_earned_coins, log.teamLeaderEarnedCoins),
     };
 
     const { error } = await client.from('call_logs').upsert(payload as any, { onConflict: 'id' });

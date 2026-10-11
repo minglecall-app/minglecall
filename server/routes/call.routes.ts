@@ -633,6 +633,50 @@ export function createCallRouter(ctx: ServerRuntime): Router {
         if (tlId) call.teamLeaderId = tlId;
         call.durationSeconds = Math.max(call.durationSeconds || 0, (billingMinute - 1) * 60);
         (call as any).billedMinutes = billingMinute;
+
+        // Persist the running session total so the host badge (call_logs poll) grows each minute.
+        if (supabase) {
+          const { data: row } = await supabase
+            .from('call_logs')
+            .select('coins_spent, coins_earned, duration_seconds')
+            .eq('id', callId)
+            .maybeSingle();
+          const nextSpent = Math.max(
+            call.coinsSpent || 0,
+            (Number(row?.coins_spent) || 0) + burned
+          );
+          const nextEarned = Math.max(
+            call.coinsEarned || 0,
+            (Number(row?.coins_earned) || 0) + hostEarned
+          );
+          const nextDuration = Math.max(
+            call.durationSeconds || 0,
+            Number(row?.duration_seconds) || 0,
+            (billingMinute - 1) * 60
+          );
+          const totalsPatch: Record<string, unknown> = {
+            status: 'active',
+            coins_spent: nextSpent,
+            coins_earned: nextEarned,
+            duration_seconds: nextDuration,
+            burn_rate_per_min: coinsBurned,
+            was_friend_call: isFriendPair,
+            ended_at: null,
+            end_time: null,
+          };
+          if (tlId) totalsPatch.team_leader_id = tlId;
+          const { error: totalsErr } = await supabase
+            .from('call_logs')
+            .update(totalsPatch)
+            .eq('id', callId);
+          if (totalsErr) {
+            console.warn('[calls/burn] call_logs totals', totalsErr.message);
+          } else {
+            call.coinsSpent = nextSpent;
+            call.coinsEarned = nextEarned;
+            call.durationSeconds = nextDuration;
+          }
+        }
       }
 
       const memCaller = serverUsers.get(callerId);
