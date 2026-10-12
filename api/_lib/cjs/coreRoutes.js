@@ -1363,7 +1363,15 @@ async function handleGifts(path, req, res) {
       p_host_coins: hostShare,
       p_tl_coins: tlShare,
       p_idempotency_key: idempotencyKey,
-      p_metadata: { giftId, receiverId, kind: 'gift', cost },
+      p_metadata: {
+        giftId,
+        receiverId,
+        kind: 'gift',
+        cost,
+        ...(String((body && body.callId) || '').trim()
+          ? { session_call_id: String(body.callId).trim().slice(0, 200) }
+          : {}),
+      },
     });
     if (rpcErr) {
       console.error('[api/gifts/send] RPC error:', rpcErr.message);

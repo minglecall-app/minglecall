@@ -6,7 +6,11 @@ const net = require('net');
 const { Redis } = require('@upstash/redis');
 const { TokenVerifier } = require('livekit-server-sdk');
 const { clean, createServiceClient, getPooledDatabaseUrl } = require('./helpers');
-const { getRedisRestCredentials } = require('./redisEnv');
+const {
+  getRedisRestCredentials,
+  inspectRedisEnv,
+  configHint,
+} = require('./redisEnv');
 
 const CHANNEL_RE = /^admin-diag-[A-Za-z0-9_-]{6,64}$/;
 const NONCE_RE = /^[A-Za-z0-9_-]{6,80}$/;
@@ -105,15 +109,29 @@ async function runRedisFallback(input) {
   const client = redisClient();
 
   if (!client) {
+    const inspect = inspectRedisEnv();
     steps.push({
       id: 'redis-config',
       label: 'Upstash Redis configuration',
       ok: false,
       latencyMs: 0,
-      detail:
-        'Redis REST credentials are not set. Expected UPSTASH_REDIS_REST_URL/TOKEN or Vercel KV_REST_API_URL/TOKEN. Heartbeat returns 503 REDIS_UNAVAILABLE.',
+      detail: configHint(inspect),
+      data: {
+        envKeysPresent: inspect.present,
+        tcpOnly: inspect.tcpOnly,
+        hasWriteToken: inspect.hasWriteToken,
+        hasReadOnlyOnly: inspect.hasReadOnlyOnly,
+        onVercel: inspect.onVercel,
+        vercelEnv: inspect.vercelEnv,
+        needed: ['KV_REST_API_URL + KV_REST_API_TOKEN', 'or UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN'],
+      },
     });
-    return finish('redis-fallback', tAll, steps, 'Redis is not configured, so presence heartbeat must fail closed.');
+    return finish(
+      'redis-fallback',
+      tAll,
+      steps,
+      'Redis REST credentials missing in this runtime — presence heartbeat fail-closed with 503.'
+    );
   }
 
   const tPing = Date.now();

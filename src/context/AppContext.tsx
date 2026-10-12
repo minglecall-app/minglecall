@@ -2293,7 +2293,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           .map((u) => u.id);
         idsToRemove.push(...teamLeaderIds);
         if (teamLeaderIds.length > 0) {
-          categoriesCleared.push('Team Leader & Agency Data');
+          categoriesCleared.push('Agency Data');
         }
       }
 
@@ -5266,7 +5266,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (currentUser.role === 'team_leader' || currentUser.role === 'agency_manager') {
       showToast(
         'Agency Role Restriction',
-        'Team Leaders cannot initiate calls. Your account is dedicated to managing female host teams and earning agency commission.',
+        'Agencies cannot initiate calls. Your account is dedicated to managing female host teams and earning agency commission.',
         'warning'
       );
       return false;
@@ -5282,7 +5282,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (receiver.role === 'team_leader' || receiver.role === 'agency_manager') {
       showToast(
         'Unavailable for Calls',
-        'Team Leaders cannot receive live calls. Team Leaders only manage agency hosts.',
+        'Agencies cannot receive live calls. Agencies only manage agency hosts.',
         'warning'
       );
       return false;
@@ -6403,6 +6403,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       body: JSON.stringify({
         receiverId: activeCall.receiverId,
         giftId: gift.id,
+        callId: activeCall.id,
         clientTempId: giftIdempotencyKey,
         idempotencyKey: giftIdempotencyKey,
       }),
@@ -6997,7 +6998,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const submitPayoutRequest = (_amountCoins: number, _payoutMethod: string, _accountDetails: string): boolean => {
     showToast(
       'Period-End Settlements Only',
-      'Manual withdrawals are disabled. Host salaries and TL commissions pay out through settlement batches at period close.',
+      'Manual withdrawals are disabled. Host salaries and Agency commissions pay out through settlement batches at period close.',
       'warning'
     );
     return false;
@@ -7476,11 +7477,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const password = String((leaderData as any).password || '');
 
     if (!name) {
-      showToast('Validation Error', 'Team leader name is required.', 'error');
+      showToast('Validation Error', 'Agency name is required.', 'error');
       return null;
     }
     if (!email || !email.includes('@')) {
-      showToast('Validation Error', 'A valid login email is required so the team leader can sign in.', 'error');
+      showToast('Validation Error', 'A valid login email is required so the agency can sign in.', 'error');
       return null;
     }
     const pwError = getPasswordPolicyError(password);
@@ -7513,8 +7514,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const msg =
           data?.error?.message ||
           data?.message ||
-          `Failed to create team leader (HTTP ${res.status}).`;
-        showToast('Team Leader Not Created', msg, 'error');
+          `Failed to create agency (HTTP ${res.status}).`;
+        showToast('Agency Not Created', msg, 'error');
         return null;
       }
 
@@ -7534,7 +7535,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         spokenLanguages: created.spokenLanguages || leaderData.spokenLanguages || ['English'],
         bio: created.bio || leaderData.bio || 'Talent Management & Creator Agency Director',
         interests: created.interests || ['Talent Growth', 'Creator Mentorship'],
-        tags: created.tags || ['Team Leader', 'VIP Agency'],
+        tags: created.tags || ['Agency', 'VIP Agency'],
         avatarUrl:
           created.avatarUrl ||
           leaderData.avatarUrl ||
@@ -7568,13 +7569,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
 
       showToast(
-        'Team Leader Created',
+        'Agency Created',
         `Saved to Supabase Auth + profiles. ${newLeader.name} can sign in with ${newLeader.email}.`,
         'success'
       );
       return newLeader;
     } catch (e: any) {
-      showToast('Team Leader Error', e?.message || 'Network error creating team leader.', 'error');
+      showToast('Agency Error', e?.message || 'Network error creating agency.', 'error');
       return null;
     }
   };
@@ -7802,7 +7803,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const banCreatorByTeamLeader = async (creatorId: string, days: number, reason: string): Promise<boolean> => {
     const banDays = Number(days) || 7;
-    const banReason = reason || 'Suspended by Team Leader';
+    const banReason = reason || 'Suspended by Agency';
     const targetBefore = usersRef.current.find((u) => u.id === creatorId) || users.find((u) => u.id === creatorId);
     const targetName = targetBefore?.name || 'Female Host';
 

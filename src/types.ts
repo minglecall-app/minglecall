@@ -15,7 +15,7 @@ export function getUserRoleLabel(user?: { role?: string; gender?: string; teamLe
   const gender = user.gender;
 
   if (role === 'admin') return 'Admin';
-  if (role === 'team_leader' || role === 'agency_manager') return 'Team Leader';
+  if (role === 'team_leader' || role === 'agency_manager') return 'Agency';
   if (role === 'other_user' || gender === 'other') return 'Other User';
 
   if (

@@ -773,7 +773,7 @@ export const AdminDatabaseStorageConfig: React.FC<AdminDatabaseStorageConfigProp
           if (showToastNotice) {
             showToast(
               'Schema Updated & Populated 🚀',
-              `Latest production SQL schema loaded (${data.tablesCount || 17} tables, Team Leader & Agency attribution, Taxonomies, RLS policies, Realtime triggers). Ready to copy & run in Supabase!`,
+              `Latest production SQL schema loaded (${data.tablesCount || 17} tables, Agency attribution, Taxonomies, RLS policies, Realtime triggers). Ready to copy & run in Supabase!`,
               'success'
             );
           }
@@ -1769,7 +1769,7 @@ export const AdminDatabaseStorageConfig: React.FC<AdminDatabaseStorageConfigProp
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                Complete consolidated PostgreSQL database definition with 17 tables, Taxonomies (240+ Countries, 60+ Languages, 12 Zodiacs, 38+ Interests), Team Leader attribution, RLS policies, Auth sync triggers, and Realtime replication.
+                Complete consolidated PostgreSQL database definition with 17 tables, Taxonomies (240+ Countries, 60+ Languages, 12 Zodiacs, 38+ Interests), Agency attribution, RLS policies, Auth sync triggers, and Realtime replication.
               </p>
             </div>
 
@@ -1922,7 +1922,7 @@ export const AdminDatabaseStorageConfig: React.FC<AdminDatabaseStorageConfigProp
                 <span>3. Live Multi-Device Sync</span>
               </div>
               <p className="text-slate-400 text-[11px]">
-                All team leaders, female creators, earnings, and payout requests now persist safely without data loss.
+                All agencies, female creators, earnings, and payout requests now persist safely without data loss.
               </p>
             </div>
           </div>

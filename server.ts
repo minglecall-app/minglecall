@@ -76,6 +76,7 @@ import {
   createFriendsRouter,
   createMessagesRouter,
   createFinanceRouter,
+  createPayoutRouter,
   createUsersPublicRouter,
 } from './server/routes';
 import {
@@ -2065,6 +2066,7 @@ async function startServer(): Promise<express.Express> {
   app.use('/api/v1/users', createUsersPublicRouter(runtime));
   app.use('/api/messages', createMessagesRouter(runtime));
   app.use('/api/v1/finance', createFinanceRouter(runtime));
+  app.use('/api', createPayoutRouter(runtime));
 
   // Financial Module: ensure an open settlement period exists for the current cycle
   if (isSupabaseAdminConfigured()) {
@@ -3635,6 +3637,10 @@ async function startServer(): Promise<express.Express> {
           giftName: catalogGift.name,
           kind: 'gift',
           cost: giftCost,
+          // Real video-call id when gift is sent in-call (ledger call_id stays idempotency key).
+          ...(String(req.body?.callId || '').trim()
+            ? { session_call_id: String(req.body.callId).trim().slice(0, 200) }
+            : {}),
         },
       });
 

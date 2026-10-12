@@ -411,7 +411,7 @@ export const AdminUserAnalyticsDrawer: React.FC<AdminUserAnalyticsDrawerProps> =
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                      <div className="text-slate-500">TL commission</div>
+                      <div className="text-slate-500">Agency commission</div>
                       <div className="text-amber-300 font-black">{formatUsd(detail.periodEarnedUSD)}</div>
                     </div>
                     <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">

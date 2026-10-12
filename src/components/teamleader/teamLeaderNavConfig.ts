@@ -7,7 +7,10 @@ export type TeamLeaderTabKey =
   | 'creators'
   | 'leaderboard'
   | 'analytics'
+  | 'tl_earnings'
+  | 'host_earnings'
   | 'payouts'
+  | 'payout_cards'
   | 'agency';
 
 export type TeamLeaderNavActionKey = 'sync-db' | 'create-creator';
@@ -17,6 +20,9 @@ export type TeamLeaderNavIconName =
   | 'Crown'
   | 'TrendingUp'
   | 'DollarSign'
+  | 'Wallet'
+  | 'Coins'
+  | 'CreditCard'
   | 'Building'
   | 'RefreshCw'
   | 'UserPlus'
@@ -88,11 +94,35 @@ export const TEAM_LEADER_NAV_GROUPS: TeamLeaderNavGroup[] = [
     label: 'Money',
     items: [
       {
+        id: 'tl_earnings',
+        label: 'Agency Earnings',
+        icon: 'Wallet',
+        kind: 'tab',
+        buttonId: 'tl-tab-tl-earnings',
+        title: 'Your commission week / month / lifetime',
+      },
+      {
+        id: 'host_earnings',
+        label: 'Host Earnings',
+        icon: 'Coins',
+        kind: 'tab',
+        buttonId: 'tl-tab-host-earnings',
+        title: 'Managed hosts week / month / lifetime',
+      },
+      {
         id: 'payouts',
         label: 'Settlements',
         icon: 'DollarSign',
         kind: 'tab',
         buttonId: 'tl-tab-payouts',
+      },
+      {
+        id: 'payout_cards',
+        label: 'Payout Cards',
+        icon: 'CreditCard',
+        kind: 'tab',
+        buttonId: 'tl-tab-payout-cards',
+        title: 'Your payout details and managed hosts’ cards for local salary pay',
       },
     ],
   },

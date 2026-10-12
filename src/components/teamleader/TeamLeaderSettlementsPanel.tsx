@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Clock,
   DollarSign,
+  Eye,
   Loader2,
   RefreshCw,
   AlertTriangle,
@@ -17,8 +18,12 @@ import { useApp } from '../../context/AppContext';
 import {
   fetchTlFinanceBatch,
   fetchTlFinanceBatches,
+  fetchTlSalaryEstimatePreview,
   postTlConfirmReceived,
+  postTlMarkHostPaid,
+  postTlReconcileBatch,
 } from '../../services/financeApi';
+import { SalaryEstimatePreviewModal } from '../finance/SalaryEstimatePreviewModal';
 
 function formatUsd(n: number | undefined | null) {
   return `$${(Number(n) || 0).toLocaleString(undefined, {
@@ -56,6 +61,7 @@ export const TeamLeaderSettlementsPanel: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  const [estimateOpen, setEstimateOpen] = useState(false);
 
   const nameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -100,24 +106,36 @@ export const TeamLeaderSettlementsPanel: React.FC = () => {
     void loadDetail(selectedId);
   }, [selectedId, loadDetail]);
 
+  const normalizeAck = (raw: string | undefined) => {
+    const s = String(raw || 'pending');
+    if (s === 'acknowledged' || s === 'paid') return 'acknowledged';
+    if (s === 'admin_paid') return 'admin_paid';
+    return 'pending';
+  };
+
+  const worstAck = (a: string, b: string) => {
+    const rank: Record<string, number> = { pending: 0, admin_paid: 1, acknowledged: 2 };
+    return (rank[a] ?? 0) <= (rank[b] ?? 0) ? a : b;
+  };
+
   const hostLines = useMemo(() => {
     const lines = detail?.lineItems || [];
-    // Group host payees for a per-host payable table
     const byHost = new Map<
       string,
       { payeeUserId: string; components: any[]; totalUsd: number; salaryStatus: string }
     >();
     for (const li of lines) {
       if (li.payeeRole !== 'host') continue;
+      const st = normalizeAck(li.hostSalaryStatus);
       const prev = byHost.get(li.payeeUserId) || {
         payeeUserId: li.payeeUserId,
         components: [] as any[],
         totalUsd: 0,
-        salaryStatus: 'paid',
+        salaryStatus: 'acknowledged',
       };
       prev.components.push(li);
       prev.totalUsd += Number(li.amountUsd) || 0;
-      if (li.hostSalaryStatus !== 'paid') prev.salaryStatus = 'pending';
+      prev.salaryStatus = worstAck(prev.salaryStatus, st);
       byHost.set(li.payeeUserId, prev);
     }
     return Array.from(byHost.values());
@@ -128,16 +146,70 @@ export const TeamLeaderSettlementsPanel: React.FC = () => {
     [detail]
   );
 
+  const tlAckStatus = useMemo(() => {
+    if (!tlCommissionLines.length) return 'pending';
+    return tlCommissionLines.reduce(
+      (acc: string, li: any) => worstAck(acc, normalizeAck(li.hostSalaryStatus)),
+      'acknowledged'
+    );
+  }, [tlCommissionLines]);
+
+  const hostAckProgress = useMemo(() => {
+    const total = hostLines.length;
+    const acknowledged = hostLines.filter((h) => h.salaryStatus === 'acknowledged').length;
+    return { acknowledged, total };
+  }, [hostLines]);
+
+  const reconcileSelected = async () => {
+    if (!selectedId) return;
+    setBusy(true);
+    const res = await postTlReconcileBatch(selectedId, { note: note || undefined });
+    setBusy(false);
+    if (!res.success) {
+      showToast('Reconcile failed', res.error?.message || 'Error', 'error');
+      return;
+    }
+    showToast(
+      'Reconciled',
+      res.data?.alreadyReconciled ? 'Already reconciled.' : 'Amounts confirmed for this batch.',
+      'success'
+    );
+    await loadBatches();
+    await loadDetail(selectedId);
+  };
+
+  const markHostPaid = async (hostUserId: string) => {
+    if (!selectedId) return;
+    setBusy(true);
+    const res = await postTlMarkHostPaid(selectedId, hostUserId);
+    setBusy(false);
+    if (!res.success) {
+      showToast('Mark paid failed', res.error?.message || 'Error', 'error');
+      return;
+    }
+    showToast(
+      'Host salary paid',
+      res.data?.alreadyPaid ? 'Already marked paid.' : 'Host can now acknowledge receipt.',
+      'success'
+    );
+    await loadBatches();
+    await loadDetail(selectedId);
+  };
+
   const confirmReceived = async () => {
     if (!selectedId) return;
     setBusy(true);
     const res = await postTlConfirmReceived(selectedId, { note: note || undefined });
     setBusy(false);
     if (!res.success) {
-      showToast('Confirm failed', res.error?.message || 'Error', 'error');
+      showToast('Acknowledge failed', res.error?.message || 'Error', 'error');
       return;
     }
-    showToast('Confirmed', 'Settlement marked as received. Host salaries updated to Paid.', 'success');
+    showToast(
+      'Payment acknowledged',
+      'Your Agency commission receipt was recorded. Hosts acknowledge separately.',
+      'success'
+    );
     setNote('');
     await loadBatches();
     await loadDetail(selectedId);
@@ -152,20 +224,38 @@ export const TeamLeaderSettlementsPanel: React.FC = () => {
             Agency settlement batches (Financial Module)
           </h4>
           <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-            Each batch is one admin remittance for your agency: managed host salaries + your TL commission.
-            Confirm received after admin marks the batch paid.
+            Reconcile your batch → wait for Admin remittance → mark each host Salary Paid → hosts
+            acknowledge. Then acknowledge your Agency commission.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void loadBatches()}
-          disabled={loading || busy}
-          className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-          Refresh
-        </button>
+        <div className="flex flex-col gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setEstimateOpen(true)}
+            className="px-3 py-1.5 rounded-xl bg-emerald-950/50 border border-emerald-700/50 text-emerald-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+          >
+            <Eye className="w-3.5 h-3.5" />
+            Preview estimate
+          </button>
+          <button
+            type="button"
+            onClick={() => void loadBatches()}
+            disabled={loading || busy}
+            className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Refresh
+          </button>
+        </div>
       </div>
+
+      <SalaryEstimatePreviewModal
+        open={estimateOpen}
+        onClose={() => setEstimateOpen(false)}
+        variant="tl"
+        title="Estimated agency salary (current period till date)"
+        load={fetchTlSalaryEstimatePreview}
+      />
 
       {error && (
         <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-700/50 text-rose-200 text-xs flex items-center gap-2">
@@ -200,10 +290,21 @@ export const TeamLeaderSettlementsPanel: React.FC = () => {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className={`px-2 py-0.5 rounded border text-[10px] font-mono font-bold ${statusTone(b.status)}`}>
-                      {b.status}
+                      {b.status === 'tl_confirmed' ? 'Complete' : b.status}
                     </span>
                     <span className="text-sm font-black text-emerald-400 font-mono">
                       {formatUsd(b.totalDueUsd)}
+                    </span>
+                  </div>
+                  <div className="mt-1.5">
+                    <span
+                      className={`px-2 py-0.5 rounded border text-[10px] font-mono font-bold ${
+                        b.reconcileStatus === 'reconciled'
+                          ? 'bg-emerald-950/60 text-emerald-300 border-emerald-600/40'
+                          : 'bg-amber-950/60 text-amber-300 border-amber-600/40'
+                      }`}
+                    >
+                      {b.reconcileStatus === 'reconciled' ? 'Reconciled' : 'Not reconciled'}
                     </span>
                   </div>
                   <div className="mt-2 text-[11px] text-slate-400 font-mono space-y-0.5">
@@ -238,7 +339,7 @@ export const TeamLeaderSettlementsPanel: React.FC = () => {
                   <div className="font-black text-white mt-1 font-mono">{formatUsd(detail.batch?.totalHostSalaryUsd)}</div>
                 </div>
                 <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                  <div className="text-slate-500">TL commission</div>
+                  <div className="text-slate-500">Agency commission</div>
                   <div className="font-black text-amber-300 mt-1 font-mono">{formatUsd(detail.batch?.totalTlCommissionUsd)}</div>
                 </div>
                 <div className="p-3 rounded-xl bg-emerald-950/30 border border-emerald-700/40">
@@ -260,12 +361,13 @@ export const TeamLeaderSettlementsPanel: React.FC = () => {
                         <th className="p-2">Components</th>
                         <th className="p-2">Amount USD</th>
                         <th className="p-2">Salary status</th>
+                        <th className="p-2">Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {hostLines.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="p-4 text-center text-slate-500">
+                          <td colSpan={5} className="p-4 text-center text-slate-500">
                             No host line items in this batch.
                           </td>
                         </tr>
@@ -289,13 +391,33 @@ export const TeamLeaderSettlementsPanel: React.FC = () => {
                             <td className="p-2 font-mono">
                               <span
                                 className={`px-2 py-0.5 rounded border text-[10px] ${
-                                  h.salaryStatus === 'paid'
+                                  h.salaryStatus === 'acknowledged'
                                     ? 'border-emerald-500/40 text-emerald-300'
-                                    : 'border-amber-500/40 text-amber-300'
+                                    : h.salaryStatus === 'admin_paid'
+                                      ? 'border-indigo-500/40 text-indigo-300'
+                                      : 'border-amber-500/40 text-amber-300'
                                 }`}
                               >
-                                {h.salaryStatus}
+                                {h.salaryStatus === 'acknowledged'
+                                  ? 'Received'
+                                  : h.salaryStatus === 'admin_paid'
+                                    ? 'Salary Paid'
+                                    : 'Unpaid'}
                               </span>
+                            </td>
+                            <td className="p-2">
+                              {detail.batch?.status === 'admin_paid' &&
+                                detail.batch?.reconcileStatus === 'reconciled' &&
+                                h.salaryStatus === 'pending' && (
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => void markHostPaid(h.payeeUserId)}
+                                    className="px-2 py-1 rounded-lg bg-emerald-600/90 text-white text-[10px] font-bold disabled:opacity-50"
+                                  >
+                                    Mark paid
+                                  </button>
+                                )}
                             </td>
                           </tr>
                         ))
@@ -307,17 +429,55 @@ export const TeamLeaderSettlementsPanel: React.FC = () => {
 
               {tlCommissionLines.length > 0 && (
                 <div className="text-xs font-mono text-slate-400 space-y-1">
-                  <div className="font-bold text-slate-300">Your commission lines</div>
+                  <div className="font-bold text-slate-300 flex flex-wrap items-center justify-between gap-2">
+                    <span>Your commission lines</span>
+                    <span
+                      className={`px-2 py-0.5 rounded border text-[10px] ${
+                        tlAckStatus === 'acknowledged'
+                          ? 'border-emerald-500/40 text-emerald-300'
+                          : tlAckStatus === 'admin_paid'
+                            ? 'border-indigo-500/40 text-indigo-300'
+                            : 'border-amber-500/40 text-amber-300'
+                      }`}
+                    >
+                      {tlAckStatus === 'acknowledged'
+                        ? 'received'
+                        : tlAckStatus === 'admin_paid'
+                          ? 'admin_paid'
+                          : 'unpaid'}
+                    </span>
+                  </div>
                   {tlCommissionLines.map((li: any) => (
                     <div key={li.id} className="flex justify-between gap-2 bg-slate-950/60 rounded-lg px-2 py-1.5">
                       <span>{li.component}</span>
                       <span className="text-amber-300">{formatUsd(li.amountUsd)}</span>
                     </div>
                   ))}
+                  <div className="text-[10px] text-slate-500 pt-1">
+                    Host ack progress: {hostAckProgress.acknowledged}/{hostAckProgress.total}
+                  </div>
                 </div>
               )}
 
-              {detail.batch?.status === 'admin_paid' && (
+              {detail.batch?.reconcileStatus !== 'reconciled' &&
+                detail.batch?.status !== 'cancelled' && (
+                  <div className="border-t border-slate-800 pt-3 space-y-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void reconcileSelected()}
+                      className="px-4 py-2.5 rounded-xl bg-sky-600 text-white text-xs font-black flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                      Reconcile batch
+                    </button>
+                    <p className="text-[10px] text-slate-500">
+                      Confirm host + commission amounts. Required before Admin remittance.
+                    </p>
+                  </div>
+                )}
+
+              {detail.batch?.status === 'admin_paid' && tlAckStatus !== 'acknowledged' && (
                 <div className="border-t border-slate-800 pt-3 space-y-2">
                   <input
                     value={note}
@@ -332,20 +492,27 @@ export const TeamLeaderSettlementsPanel: React.FC = () => {
                     className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 text-xs font-black flex items-center gap-2 cursor-pointer disabled:opacity-50"
                   >
                     {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                    Confirm received
+                    Acknowledge payment
                   </button>
                   <p className="text-[10px] text-slate-500 flex items-center gap-1">
                     <Clock className="w-3 h-3" />
-                    Confirms funds received and marks agency host salaries as Paid.
+                    Acknowledges your Agency commission only. Hosts must acknowledge their own salaries.
                   </p>
                 </div>
               )}
 
-              {detail.batch?.status === 'pending_admin_pay' && (
-                <p className="text-[11px] text-amber-300/90 bg-amber-950/20 border border-amber-700/30 rounded-xl p-3">
-                  Waiting for admin remittance. Confirm received unlocks after status is <span className="font-mono">admin_paid</span>.
-                </p>
-              )}
+              {detail.batch?.status === 'pending_admin_pay' &&
+                detail.batch?.reconcileStatus === 'reconciled' && (
+                  <p className="text-[11px] text-amber-300/90 bg-amber-950/20 border border-amber-700/30 rounded-xl p-3">
+                    Reconciled — waiting for Admin remittance. Then mark each host Salary Paid.
+                  </p>
+                )}
+              {detail.batch?.status === 'pending_admin_pay' &&
+                detail.batch?.reconcileStatus !== 'reconciled' && (
+                  <p className="text-[11px] text-amber-300/90 bg-amber-950/20 border border-amber-700/30 rounded-xl p-3">
+                    Not reconciled yet — review amounts and tap Reconcile batch.
+                  </p>
+                )}
             </>
           )}
         </div>

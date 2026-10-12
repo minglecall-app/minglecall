@@ -886,7 +886,7 @@ export const PublicProfilePage: React.FC<PublicProfilePageProps> = ({
 
           {liveUser.role === 'team_leader' || liveUser.role === 'agency_manager' ? (
             <div className="h-11 w-full bg-amber-950/40 border border-amber-500/30 text-amber-300 rounded-xl font-mono font-bold text-[11px] flex items-center justify-center px-2 text-center">
-              Agency Team Leader
+              Agency
             </div>
           ) : currentUser.role === 'team_leader' ? (
             <div className="h-11 w-full bg-slate-900 border border-slate-800 text-slate-400 rounded-xl font-mono text-[11px] flex items-center justify-center px-2 text-center">

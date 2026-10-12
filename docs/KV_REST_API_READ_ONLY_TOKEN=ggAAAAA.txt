@@ -4,6 +4,10 @@ KV_REST_API_URL="https://neutral-stag-219287.upstash.io"
 KV_URL="rediss://default:gQAAAAAAA1iXAAIgcDJlOWViMTczNmUxZTQ0YWQxOTA0YWM5OGZmOTFmMjA1NQ@neutral-stag-219287.upstash.io:6379"
 REDIS_URL="rediss://default:gQAAAAAAA1iXAAIgcDJlOWViMTczNmUxZTQ0YWQxOTA0YWM5OGZmOTFmMjA1NQ@neutral-stag-219287.upstash.io:6379"
 
+supabse DB password: hlCW6ffVNU6xvuYy
+supabase project ref:xhcuwokureuzvocvveqw
+postgresql://postgres.xhcuwokureuzvocvveqw:hlCW6ffVNU6xvuYy@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true
+
 IMPLEMENTATION CHECK PROMPT
 You are my expert system architect and code auditor. We have just refactored our dating app to support a high-concurrency architecture (Next.js/Vercel + Supabase + Upstash Redis + LiveKit Cloud). 
 

@@ -105,6 +105,8 @@ interface FemaleHostAnalyticsDashboardProps {
   onOpenCallLogs?: () => void;
   onOpenChat?: (userId: string) => void;
   onStartCall?: (userId: string) => void;
+  /** Navigate to Money → Payout Cards (HostShell). */
+  onOpenPayoutCards?: () => void;
   /** When true, hide page banner / in-page tabs (HostShell owns chrome). */
   shellMode?: boolean;
   /** Controlled section when used inside HostShell. */
@@ -119,6 +121,7 @@ export const FemaleHostAnalyticsDashboard: React.FC<FemaleHostAnalyticsDashboard
   onOpenCallLogs,
   onOpenChat,
   onStartCall,
+  onOpenPayoutCards,
   shellMode = false,
   activeSection: controlledSection,
   onSectionChange,
@@ -827,7 +830,7 @@ export const FemaleHostAnalyticsDashboard: React.FC<FemaleHostAnalyticsDashboard
               </div>
             </div>
 
-            {/* Right: Supported Payout Gateways Overview */}
+            {/* Right: Remittance overview → Money → Payout Cards */}
             <div className="p-5 sm:p-6 bg-[#13161F] border border-slate-800 rounded-3xl space-y-4 shadow-xl">
               <div className="flex items-center space-x-2">
                 <Building className="w-5 h-5 text-indigo-400" />
@@ -836,39 +839,37 @@ export const FemaleHostAnalyticsDashboard: React.FC<FemaleHostAnalyticsDashboard
                 </h3>
               </div>
               <p className="text-xs text-slate-400">
-                Cash-out is period-end only via settlement batches (not mid-period withdrawals). Remittance channels used by admin/TL:
+                Cash-out is period-end only via settlement batches. Save your PayPal, bank, or wallet
+                details under Money → Payout Cards for local salary pay.
               </p>
 
               <div className="grid grid-cols-2 gap-2.5 font-mono text-xs">
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center space-x-3">
                   <Wallet className="w-5 h-5 text-blue-400 shrink-0" />
                   <div>
-                    <div className="font-bold text-white">PayPal Wallet</div>
-                    <div className="text-[10px] text-slate-500">Agency remittance</div>
+                    <div className="font-bold text-white">PayPal</div>
+                    <div className="text-[10px] text-slate-500">Wallet remittance</div>
                   </div>
                 </div>
-
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center space-x-3">
                   <Building className="w-5 h-5 text-emerald-400 shrink-0" />
                   <div>
-                    <div className="font-bold text-white">Bank Wire / IBAN</div>
-                    <div className="text-[10px] text-slate-500">SEPA & ACH</div>
+                    <div className="font-bold text-white">Bank Account</div>
+                    <div className="text-[10px] text-slate-500">IBAN / wire</div>
                   </div>
                 </div>
-
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center space-x-3">
                   <Zap className="w-5 h-5 text-amber-400 shrink-0" />
                   <div>
-                    <div className="font-bold text-white">USDT / Crypto</div>
-                    <div className="text-[10px] text-slate-500">TRC20 & ERC20 • Instant</div>
+                    <div className="font-bold text-white">Wallets</div>
+                    <div className="text-[10px] text-slate-500">USDT, GCash, PIX…</div>
                   </div>
                 </div>
-
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center space-x-3">
                   <CreditCard className="w-5 h-5 text-pink-400 shrink-0" />
                   <div>
-                    <div className="font-bold text-white">Local E-Wallets</div>
-                    <div className="text-[10px] text-slate-500">Revolut, PIX, GCash</div>
+                    <div className="font-bold text-white">Your cards</div>
+                    <div className="text-[10px] text-slate-500">Edit under Money</div>
                   </div>
                 </div>
               </div>
@@ -878,10 +879,21 @@ export const FemaleHostAnalyticsDashboard: React.FC<FemaleHostAnalyticsDashboard
                   Cash-out:{' '}
                   <strong className="text-white">Period-end settlements only</strong>
                 </span>
-                <span className="text-emerald-400 flex items-center space-x-1">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>View Salary Status</span>
-                </span>
+                {onOpenPayoutCards ? (
+                  <button
+                    type="button"
+                    onClick={onOpenPayoutCards}
+                    className="text-emerald-400 flex items-center space-x-1 hover:text-emerald-300"
+                  >
+                    <CreditCard className="w-3.5 h-3.5" />
+                    <span>Open Payout Cards</span>
+                  </button>
+                ) : (
+                  <span className="text-emerald-400 flex items-center space-x-1">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Money → Payout Cards</span>
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -1287,10 +1299,20 @@ export const FemaleHostAnalyticsDashboard: React.FC<FemaleHostAnalyticsDashboard
         </div>
       )}
 
-      {/* 6. SECTION: SALARY STATUS (NO AMOUNTS) */}
+      {/* 6. SECTION: SALARY STATUS ONLY (payout cards = Money → Payout Cards) */}
       {activeSection === 'payouts' && (
         <div className="space-y-6">
           <HostSalaryStatusPanel />
+          {onOpenPayoutCards ? (
+            <button
+              type="button"
+              onClick={onOpenPayoutCards}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs font-bold text-emerald-300 hover:bg-slate-800"
+            >
+              <CreditCard className="w-3.5 h-3.5" />
+              Manage payout cards
+            </button>
+          ) : null}
         </div>
       )}
 

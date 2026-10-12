@@ -15,13 +15,16 @@ export type AdminSubTabKey =
   | 'infra'
   | 'api-health'
   | 'system-testing'
+  | 'k6-load'
   | 'email'
   | 'skus'
   | 'leaders'
   | 'payouts'
   | 'users'
   | 'cms'
-  | 'cms-navigation';
+  | 'cms-navigation'
+  | 'cms-payout-cards'
+  | 'office-rbac';
 
 /** Non-tab sidebar actions (Setup Wizard / Reset Data). */
 export type AdminNavActionKey = 'setup-wizard' | 'reset-data';
@@ -66,7 +69,8 @@ export type AdminNavIconName =
   | 'Languages'
   | 'Sparkles'
   | 'Heart'
-  | 'FlaskConical';
+  | 'FlaskConical'
+  | 'Shield';
 
 export interface AdminNavL2Item {
   id: string;
@@ -155,9 +159,11 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         icon: 'Landmark',
         kind: 'tab',
         children: [
+          { id: 'overview', label: 'Overview', icon: 'LayoutDashboard' },
+          { id: 'salary_batches', label: 'Salary reconcile', icon: 'Wallet' },
           { id: 'live_ledger', label: 'Live ledger', icon: 'Coins' },
           { id: 'platform', label: 'Platform earnings', icon: 'Landmark' },
-          { id: 'team_leaders', label: 'Team leader earnings', icon: 'Building2' },
+          { id: 'team_leaders', label: 'Agency earnings', icon: 'Building2' },
           { id: 'hosts', label: 'Host earnings', icon: 'Users' },
           { id: 'funding', label: 'Funding / Purchases', icon: 'Coins' },
           { id: 'batches', label: 'Payout / settlement requests', icon: 'Wallet' },
@@ -169,13 +175,26 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
     ],
   },
   {
+    id: 'control_center',
+    label: 'Control Center',
+    items: [
+      {
+        id: 'office-rbac',
+        label: 'Roles & Permissions',
+        icon: 'Shield',
+        kind: 'tab',
+        title: 'Office staff roles, feature permissions, and create office users',
+      },
+    ],
+  },
+  {
     id: 'people',
     label: 'People',
     items: [
       { id: 'users', label: 'User Directory', icon: 'Users', kind: 'tab' },
       {
         id: 'leaders',
-        label: 'Team Leaders',
+        label: 'Agencies',
         icon: 'Crown',
         kind: 'tab',
         buttonId: 'admin-leaders-tab-btn',
@@ -235,6 +254,13 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         kind: 'tab',
         title: 'Redis, database pooler, billing safety, LiveKit, and realtime diagnostics',
       },
+      {
+        id: 'k6-load',
+        label: 'K6 Load Testing',
+        icon: 'Activity',
+        kind: 'tab',
+        title: 'k6 scenario catalog, copy CLI, and safe in-app smoke runs',
+      },
       { id: 'email', label: 'Email', icon: 'Mail', kind: 'tab' },
     ],
   },
@@ -259,6 +285,13 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         label: 'Navigation Editor',
         icon: 'LayoutTemplate',
         kind: 'tab',
+      },
+      {
+        id: 'cms-payout-cards',
+        label: 'Payout / Bank Cards',
+        icon: 'Landmark',
+        kind: 'tab',
+        title: 'Configure PayPal, Bank, and Wallet payout field templates',
       },
     ],
   },
@@ -296,4 +329,48 @@ export function findAdminNavL1(id: string): AdminNavL1Item | undefined {
 export function defaultL2ForTab(tab: AdminSubTabKey): string | undefined {
   const item = findAdminNavL1(tab);
   return item?.children?.[0]?.id;
+}
+
+/** Filter sidebar by office RBAC permissions (super = all). */
+export function filterAdminNavGroups(
+  groups: AdminNavGroup[],
+  opts: { isSuper: boolean; permissions: string[] }
+): AdminNavGroup[] {
+  if (opts.isSuper) return groups;
+  const granted = new Set(opts.permissions || []);
+  const can = (key: string) => {
+    if (granted.has(key)) return true;
+    if (key.includes(':')) {
+      const parent = key.split(':')[0];
+      return granted.has(parent);
+    }
+    return false;
+  };
+
+  return groups
+    .map((group) => {
+      const items = group.items
+        .map((item) => {
+          if (!can(item.id)) {
+            // Allow L1 if any child L2 is granted
+            const kids = (item.children || []).filter((c) => can(`${item.id}:${c.id}`));
+            if (!kids.length) return null;
+            return { ...item, children: kids };
+          }
+          const hasSpecificL2 = (item.children || []).some((c) =>
+            granted.has(`${item.id}:${c.id}`)
+          );
+          if (hasSpecificL2 && !granted.has(item.id)) {
+            return {
+              ...item,
+              children: (item.children || []).filter((c) => can(`${item.id}:${c.id}`)),
+            };
+          }
+          return item;
+        })
+        .filter(Boolean) as AdminNavL1Item[];
+      if (!items.length) return null;
+      return { ...group, items };
+    })
+    .filter(Boolean) as AdminNavGroup[];
 }

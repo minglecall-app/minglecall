@@ -16,6 +16,8 @@ const {
   updateFinanceSystemConfig,
   markBatchAdminPaid,
   markBatchTlConfirmed,
+  reconcileBatch,
+  agencyMarkHostPaid,
   cancelSettlementBatch,
   getNextCloseAt,
   getCurrentPeriodBounds,
@@ -27,6 +29,18 @@ const {
   failCheckoutIntent,
   getCoinUsdPeg,
   coinsToUsd,
+  aggregateWalletLedgerEarnings,
+  markPeriodAdminPaid,
+  acknowledgePayeeSalary,
+  normalizePayeeSalaryStatus,
+  listSalaryPeriods,
+  loadSalaryPeriodDetail,
+  buildSalaryEstimatePreview,
+  buildSalaryPeriodXlsx,
+  buildSalaryPeriodPdf,
+  resolveEarningsScopeAccess,
+  buildEarningsOverview,
+  buildEarningsLedger,
   PAYABLE_SOURCE_OF_TRUTH,
   PAYABLE_MODEL_NOTES,
   summarizeHostSettlementLines,
@@ -87,6 +101,10 @@ function mapBatch(row) {
     teamLeaderId: row.team_leader_id ?? null,
     payeeUserId: row.payee_user_id,
     status: row.status,
+    reconcileStatus: row.reconcile_status === 'reconciled' ? 'reconciled' : 'unreconciled',
+    reconciledAt: row.reconciled_at ?? null,
+    reconciledBy: row.reconciled_by ?? null,
+    reconciledByRole: row.reconciled_by_role ?? null,
     totalHostSalaryUsd: Number(row.total_host_salary_usd) || 0,
     totalTlCommissionUsd: Number(row.total_tl_commission_usd) || 0,
     totalDueUsd: Number(row.total_due_usd) || 0,
@@ -97,6 +115,13 @@ function mapBatch(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function transitionHttpStatus(code) {
+  if (code === 'NOT_FOUND') return 404;
+  if (code === 'FORBIDDEN') return 403;
+  if (code === 'INVALID_TRANSITION' || code === 'RECONCILE_REQUIRED') return 409;
+  return 400;
 }
 
 function mapLineItem(row) {
@@ -210,6 +235,13 @@ function extractJobSecret(req, body) {
       req.headers['X-Cron-Secret'] ||
       '');
   if (header && String(header).trim()) return String(header).trim();
+  // Vercel Cron: Authorization Bearer <CRON_SECRET> — accept only exact secret match
+  const configured = getConfiguredJobSecret();
+  const auth = String(req.headers.authorization || req.headers.Authorization || '').trim();
+  if (configured && /^Bearer\s+/i.test(auth)) {
+    const bearer = auth.replace(/^Bearer\s+/i, '').trim();
+    if (bearer && timingSafeEqualString(bearer, configured)) return bearer;
+  }
   const bodySecret = (body && body.jobSecret) || (body && body.secret);
   if (typeof bodySecret === 'string' && bodySecret.trim()) return bodySecret.trim();
   return '';
@@ -444,7 +476,8 @@ async function handleFinance(fullPath, req, res) {
     // -----------------------------------------------------------------------
     // JOBS
     // -----------------------------------------------------------------------
-    if (sub === 'jobs/close-due-periods' && method === 'POST') {
+    // GET = Vercel Cron; POST = admin UI / manual job
+    if (sub === 'jobs/close-due-periods' && (method === 'POST' || method === 'GET')) {
       const jobAuth = await requireFinanceJobAuth(req, body);
       if (jobAuth.ok === false) {
         return send(res, jobAuth.status, { success: false, error: jobAuth.error });
@@ -576,6 +609,11 @@ async function handleFinance(fullPath, req, res) {
         (profiles || []).map((p) => [String(p.id), { id: p.id, name: p.name, email: p.email }])
       );
 
+      // Ops detail view: raw per-minute / per-event rows (not call-composite).
+      const entries = rows.map((row) =>
+        mapLiveWalletLedgerRow(row, profileById.get(String(row.user_id)) || null)
+      );
+
       let callDebitCoins = 0;
       let giftDebitCoins = 0;
       let hostEarnCoins = 0;
@@ -583,9 +621,9 @@ async function handleFinance(fullPath, req, res) {
       let tlEarnCoins = 0;
       let purchaseCoins = 0;
       let rewardCoins = 0;
-      for (const row of rows) {
-        const t = String(row.transaction_type || '');
-        const amount = Number(row.amount) || 0;
+      for (const row of entries) {
+        const t = String(row.transactionType || '');
+        const amount = Number(row.amountCoins) || 0;
         if (t === 'CALL_DEBIT') callDebitCoins += Math.abs(amount);
         else if (t === 'GIFT_DEBIT') giftDebitCoins += Math.abs(amount);
         else if (t === 'HOST_EARN') hostEarnCoins += Math.max(0, amount);
@@ -618,11 +656,9 @@ async function handleFinance(fullPath, req, res) {
       };
 
       return sendOk(res, {
-        entries: rows.map((row) =>
-          mapLiveWalletLedgerRow(row, profileById.get(String(row.user_id)) || null)
-        ),
+        entries,
         aggregates,
-        pagination: { limit, offset, count: rows.length },
+        pagination: { limit, offset, count: entries.length },
       });
     }
 
@@ -720,6 +756,42 @@ async function handleFinance(fullPath, req, res) {
       });
     }
 
+    const batchReconcileMatch = sub.match(/^batches\/([^/]+)\/reconcile$/);
+    if (batchReconcileMatch && method === 'POST') {
+      const auth = await requireAdmin(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const id = String(batchReconcileMatch[1] || '').trim();
+      const actorUserId = authProfileId(auth);
+      if (!id) return sendError(res, 400, 'Batch id required', 'INVALID_ID');
+      if (!actorUserId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+
+      const result = await reconcileBatch({
+        batchId: id,
+        actorUserId,
+        actorRole: 'admin',
+        note: typeof body.note === 'string' ? body.note : undefined,
+      });
+      if (!result.success) {
+        return sendError(
+          res,
+          transitionHttpStatus(result.code),
+          result.error || 'Reconcile failed',
+          result.code || 'RECONCILE_FAILED'
+        );
+      }
+      const { data: batch } = await client
+        .from('settlement_batches')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      return sendOk(res, {
+        batch: batch ? mapBatch(batch) : null,
+        alreadyReconciled: Boolean(result.alreadyReconciled),
+      });
+    }
+
     const batchAdminPaidMatch = sub.match(/^batches\/([^/]+)\/admin-mark-paid$/);
     if (batchAdminPaidMatch && method === 'POST') {
       const auth = await requireAdmin(req);
@@ -745,9 +817,12 @@ async function handleFinance(fullPath, req, res) {
       });
 
       if (!result.success) {
-        const status =
-          result.code === 'NOT_FOUND' ? 404 : result.code === 'INVALID_TRANSITION' ? 409 : 400;
-        return sendError(res, status, result.error || 'Mark paid failed', result.code || 'MARK_PAID_FAILED');
+        return sendError(
+          res,
+          transitionHttpStatus(result.code),
+          result.error || 'Mark paid failed',
+          result.code || 'MARK_PAID_FAILED'
+        );
       }
 
       const { data: batch } = await client
@@ -1245,29 +1320,42 @@ async function handleFinance(fullPath, req, res) {
       const client = requireDb(res);
       if (!client) return undefined;
       const periodId = qstr(req, 'periodId');
+      const now = new Date();
 
-      let periodFilterId = periodId;
-      if (!periodFilterId) {
-        const ensured = await ensureOpenPeriod({ at: new Date() });
+      const ensured = await ensureOpenPeriod({ at: now });
+      const openPeriod = ensured.period;
+      const openPeriodId = openPeriod?.id || null;
+
+      let settlementPeriodId = periodId;
+      let settlementPeriodStatus = null;
+      if (!settlementPeriodId) {
         const { data: latestClosed } = await client
           .from('settlement_periods')
-          .select('id')
+          .select('id, status')
           .eq('status', 'closed')
           .order('period_end', { ascending: false })
           .limit(1)
           .maybeSingle();
-        periodFilterId = latestClosed?.id || ensured.period?.id || '';
+        settlementPeriodId = latestClosed?.id || openPeriodId || '';
+        settlementPeriodStatus = latestClosed?.status || openPeriod?.status || null;
+      } else {
+        const { data: selected } = await client
+          .from('settlement_periods')
+          .select('id, status')
+          .eq('id', settlementPeriodId)
+          .maybeSingle();
+        settlementPeriodStatus = selected?.status || null;
       }
 
       let batchesQuery = client.from('settlement_batches').select('*');
-      if (periodFilterId) batchesQuery = batchesQuery.eq('period_id', periodFilterId);
+      if (settlementPeriodId) batchesQuery = batchesQuery.eq('period_id', settlementPeriodId);
       const { data: batches, error: batchesError } = await batchesQuery;
       if (batchesError) return sendError(res, 500, batchesError.message, 'SUMMARY_FAILED');
 
       let ledgerQuery = client
         .from('financial_ledger')
         .select('entry_type, amount_usd, amount_coins');
-      if (periodFilterId) ledgerQuery = ledgerQuery.eq('period_id', periodFilterId);
+      if (settlementPeriodId) ledgerQuery = ledgerQuery.eq('period_id', settlementPeriodId);
       const { data: ledgerRows, error: ledgerError } = await ledgerQuery;
       if (ledgerError) return sendError(res, 500, ledgerError.message, 'SUMMARY_FAILED');
 
@@ -1294,8 +1382,94 @@ async function handleFinance(fullPath, req, res) {
 
       const outstanding = list.filter((b) => b.status === 'pending_admin_pay');
 
+      const { data: allPendingBatches, error: pendingError } = await client
+        .from('settlement_batches')
+        .select('id, total_due_usd, batch_kind, status')
+        .eq('status', 'pending_admin_pay');
+      if (pendingError) return sendError(res, 500, pendingError.message, 'SUMMARY_FAILED');
+      const pendingAll = allPendingBatches || [];
+      const outstandingDueUsdAll = pendingAll.reduce(
+        (s, b) => s + (Number(b.total_due_usd) || 0),
+        0
+      );
+
+      const cfg = await loadFinanceSystemConfig();
+      const peg = Number(cfg.coinUsdPeg) || getCoinUsdPeg(cfg);
+      const bounds = getCurrentPeriodBounds(cfg.creatorTargetCycle, now);
+      const nextCloseAtDate = await getNextCloseAt({ at: now, config: cfg });
+      const periodStartIso = bounds.periodStart.toISOString();
+      const periodEndIso = bounds.periodEnd.toISOString();
+      const nextCloseAtIso = nextCloseAtDate.toISOString();
+
+      let live = {
+        periodId: openPeriodId,
+        periodStart: periodStartIso,
+        periodEnd: periodEndIso,
+        nextCloseAt: nextCloseAtIso,
+        coinUsdPeg: peg,
+        callDebitCoins: 0,
+        giftDebitCoins: 0,
+        hostEarnCoins: 0,
+        tlEarnCoins: 0,
+        targetShareTrueUpCoins: 0,
+        platformRetainedCoins: 0,
+        callDebitUsd: 0,
+        giftDebitUsd: 0,
+        hostPayableUsd: 0,
+        tlPayableUsd: 0,
+        platformRetainedUsd: 0,
+      };
+
+      const accrual = await aggregateWalletLedgerEarnings({
+        periodStart: bounds.periodStart,
+        periodEnd: bounds.periodEnd,
+        client,
+      });
+      if (accrual.success) {
+        const t = accrual.totals;
+        live = {
+          ...live,
+          callDebitCoins: t.callDebitCoins,
+          giftDebitCoins: t.giftDebitCoins,
+          hostEarnCoins: t.hostEarnCoins,
+          tlEarnCoins: t.tlEarnCoins,
+          targetShareTrueUpCoins: t.targetShareTrueUpCoins,
+          platformRetainedCoins: t.platformRetainedCoins,
+          callDebitUsd: coinsToUsd(t.callDebitCoins, peg),
+          giftDebitUsd: coinsToUsd(t.giftDebitCoins, peg),
+          hostPayableUsd: coinsToUsd(t.hostEarnCoins, peg),
+          tlPayableUsd: coinsToUsd(t.tlEarnCoins, peg),
+          platformRetainedUsd: coinsToUsd(t.platformRetainedCoins, peg),
+        };
+      }
+
+      let fundingCompletedCoins = 0;
+      let fundingPaidUsd = 0;
+      let fundingPegValueUsd = 0;
+      let fundingLoadMarginUsd = 0;
+      let fundingCompletedCount = 0;
+      {
+        const { data: fundingRows, error: fundingError } = await client
+          .from('coin_purchases')
+          .select('amount_coins, amount_usd, peg_value_usd, load_margin_usd, status')
+          .eq('status', 'completed')
+          .gte('created_at', periodStartIso)
+          .lt('created_at', periodEndIso);
+        if (fundingError) return sendError(res, 500, fundingError.message, 'SUMMARY_FAILED');
+        for (const row of fundingRows || []) {
+          fundingCompletedCount += 1;
+          fundingCompletedCoins += Number(row.amount_coins) || 0;
+          fundingPaidUsd += Number(row.amount_usd) || 0;
+          fundingPegValueUsd += Number(row.peg_value_usd) || 0;
+          fundingLoadMarginUsd += Number(row.load_margin_usd) || 0;
+        }
+      }
+
       return sendOk(res, {
-        periodId: periodFilterId || null,
+        periodId: settlementPeriodId || null,
+        settlementPeriodId: settlementPeriodId || null,
+        settlementPeriodStatus,
+        openPeriodId,
         payableSourceOfTruth: PAYABLE_SOURCE_OF_TRUTH,
         platformEarnedUsd,
         hostAccruedUsd,
@@ -1309,6 +1483,33 @@ async function handleFinance(fullPath, req, res) {
           admin_paid: list.filter((b) => b.status === 'admin_paid').length,
           tl_confirmed: list.filter((b) => b.status === 'tl_confirmed').length,
           cancelled: list.filter((b) => b.status === 'cancelled').length,
+        },
+        live,
+        funding: {
+          periodId: openPeriodId,
+          completedCount: fundingCompletedCount,
+          completedCoins: fundingCompletedCoins,
+          paidUsd: fundingPaidUsd,
+          pegValueUsd: fundingPegValueUsd,
+          loadMarginUsd: fundingLoadMarginUsd,
+        },
+        remittanceAll: {
+          outstandingBatchCount: pendingAll.length,
+          outstandingDueUsd: outstandingDueUsdAll,
+          directHostCount: pendingAll.filter((b) => b.batch_kind === 'direct_host').length,
+          tlBundleCount: pendingAll.filter((b) => b.batch_kind === 'team_leader_bundle').length,
+        },
+        period: {
+          cycleType: cfg.creatorTargetCycle,
+          periodCloseUtcTime: cfg.periodCloseUtcTime,
+          settlementEnabled: cfg.settlementEnabled !== false,
+          coinUsdPeg: peg,
+          periodStart: periodStartIso,
+          periodEnd: periodEndIso,
+          nextCloseAt: nextCloseAtIso,
+          openPeriodId,
+          settlementPeriodId: settlementPeriodId || null,
+          settlementPeriodStatus,
         },
       });
     }
@@ -1399,6 +1600,28 @@ async function handleFinance(fullPath, req, res) {
     // -----------------------------------------------------------------------
     // TEAM LEADER batches
     // -----------------------------------------------------------------------
+    if (sub === 'tl/salary-estimate-preview' && method === 'GET') {
+      const auth = await requireTeamLeader(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const tlId = authProfileId(auth);
+      if (!tlId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+      const result = await buildSalaryEstimatePreview({
+        scope: 'team_leader',
+        actorUserId: tlId,
+      });
+      if (!result.success || !result.data) {
+        return sendError(
+          res,
+          500,
+          result.error || 'Failed to build salary estimate',
+          'SALARY_ESTIMATE_FAILED'
+        );
+      }
+      return sendOk(res, result.data);
+    }
+
     if (sub === 'tl/batches' && method === 'GET') {
       const auth = await requireTeamLeader(req);
       if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
@@ -1432,6 +1655,79 @@ async function handleFinance(fullPath, req, res) {
       });
     }
 
+    const tlReconcileMatch = sub.match(/^tl\/batches\/([^/]+)\/reconcile$/);
+    if (tlReconcileMatch && method === 'POST') {
+      const auth = await requireTeamLeader(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const tlId = authProfileId(auth);
+      const id = String(tlReconcileMatch[1] || '').trim();
+      if (!tlId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+      if (!id) return sendError(res, 400, 'Batch id required', 'INVALID_ID');
+
+      const result = await reconcileBatch({
+        batchId: id,
+        actorUserId: tlId,
+        actorRole: 'team_leader',
+        note: typeof body.note === 'string' ? body.note : undefined,
+      });
+      if (!result.success) {
+        return sendError(
+          res,
+          transitionHttpStatus(result.code),
+          result.error || 'Reconcile failed',
+          result.code || 'RECONCILE_FAILED'
+        );
+      }
+      const { data: batch } = await client
+        .from('settlement_batches')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      return sendOk(res, {
+        batch: batch ? mapBatch(batch) : null,
+        alreadyReconciled: Boolean(result.alreadyReconciled),
+      });
+    }
+
+    const tlHostMarkPaidMatch = sub.match(/^tl\/batches\/([^/]+)\/hosts\/([^/]+)\/mark-paid$/);
+    if (tlHostMarkPaidMatch && method === 'POST') {
+      const auth = await requireTeamLeader(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const tlId = authProfileId(auth);
+      const id = String(tlHostMarkPaidMatch[1] || '').trim();
+      const hostId = String(tlHostMarkPaidMatch[2] || '').trim();
+      if (!tlId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+      if (!id || !hostId) return sendError(res, 400, 'Batch and host id required', 'INVALID_ID');
+
+      const result = await agencyMarkHostPaid({
+        batchId: id,
+        hostUserId: hostId,
+        actorUserId: tlId,
+        note: typeof body.note === 'string' ? body.note : undefined,
+      });
+      if (!result.success) {
+        return sendError(
+          res,
+          transitionHttpStatus(result.code),
+          result.error || 'Mark host paid failed',
+          result.code || 'AGENCY_MARK_HOST_PAID_FAILED'
+        );
+      }
+      const { data: batch } = await client
+        .from('settlement_batches')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      return sendOk(res, {
+        batch: batch ? mapBatch(batch) : null,
+        alreadyPaid: Boolean(result.alreadyPaid),
+      });
+    }
+
     const tlConfirmMatch = sub.match(/^tl\/batches\/([^/]+)\/confirm-received$/);
     if (tlConfirmMatch && method === 'POST') {
       const auth = await requireTeamLeader(req);
@@ -1450,11 +1746,9 @@ async function handleFinance(fullPath, req, res) {
       });
 
       if (!result.success) {
-        const status =
-          result.code === 'NOT_FOUND' ? 404 : result.code === 'INVALID_TRANSITION' ? 409 : 400;
         return sendError(
           res,
-          status,
+          transitionHttpStatus(result.code),
           result.error || 'Confirm received failed',
           result.code || 'TL_CONFIRM_FAILED'
         );
@@ -1537,8 +1831,167 @@ async function handleFinance(fullPath, req, res) {
     }
 
     // -----------------------------------------------------------------------
+    // ADMIN — Salary periods
+    // -----------------------------------------------------------------------
+    if (sub === 'admin/salary-estimate-preview' && method === 'GET') {
+      const auth = await requireAdmin(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const actorUserId = authProfileId(auth) || 'admin';
+      const result = await buildSalaryEstimatePreview({
+        scope: 'admin',
+        actorUserId,
+      });
+      if (!result.success || !result.data) {
+        return sendError(
+          res,
+          500,
+          result.error || 'Failed to build salary estimate',
+          'SALARY_ESTIMATE_FAILED'
+        );
+      }
+      return sendOk(res, result.data);
+    }
+
+    if (sub === 'admin/salary-periods' && method === 'GET') {
+      const auth = await requireAdmin(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const limit = Math.min(Math.max(Number(qstr(req, 'limit') || req.query?.limit) || 40, 1), 100);
+      const result = await listSalaryPeriods({ limit });
+      if (!result.success) {
+        return sendError(res, 500, result.error || 'Failed to load salary periods', 'SALARY_PERIODS_FAILED');
+      }
+      return sendOk(res, { periods: result.periods || [] });
+    }
+
+    const salaryPeriodExportMatch = sub.match(/^admin\/salary-periods\/([^/]+)\/export$/);
+    if (salaryPeriodExportMatch && method === 'GET') {
+      const auth = await requireAdmin(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const periodId = String(salaryPeriodExportMatch[1] || '').trim();
+      if (!periodId) return sendError(res, 400, 'Period id required', 'INVALID_ID');
+      const format = String(qstr(req, 'format') || 'xlsx').toLowerCase();
+      if (format === 'pdf') {
+        const built = await buildSalaryPeriodPdf(periodId);
+        if (!built.success || !built.buffer) {
+          return sendError(res, 500, built.error || 'PDF export failed', 'SALARY_EXPORT_FAILED');
+        }
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${built.filename || 'salary.pdf'}"`
+        );
+        res.setHeader('Cache-Control', 'no-store');
+        return res.end(built.buffer);
+      }
+      const built = await buildSalaryPeriodXlsx(periodId);
+      if (!built.success || !built.buffer) {
+        return sendError(res, 500, built.error || 'Excel export failed', 'SALARY_EXPORT_FAILED');
+      }
+      res.statusCode = 200;
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${built.filename || 'salary.xlsx'}"`
+      );
+      res.setHeader('Cache-Control', 'no-store');
+      return res.end(built.buffer);
+    }
+
+    const salaryPeriodMarkPaidMatch = sub.match(/^admin\/salary-periods\/([^/]+)\/mark-paid$/);
+    if (salaryPeriodMarkPaidMatch && method === 'POST') {
+      const auth = await requireAdmin(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const periodId = String(salaryPeriodMarkPaidMatch[1] || '').trim();
+      const actorUserId = authProfileId(auth);
+      if (!periodId) return sendError(res, 400, 'Period id required', 'INVALID_ID');
+      if (!actorUserId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+      const result = await markPeriodAdminPaid({
+        periodId,
+        actorUserId,
+        note: typeof body.note === 'string' ? body.note : undefined,
+        paymentReference:
+          typeof body.paymentReference === 'string'
+            ? body.paymentReference
+            : typeof body.payment_reference === 'string'
+              ? body.payment_reference
+              : undefined,
+      });
+      if (!result.success) {
+        const status =
+          result.code === 'NOT_FOUND' ? 404 : result.code === 'INVALID_TRANSITION' ? 409 : 400;
+        return sendError(
+          res,
+          status,
+          result.error || 'Mark period paid failed',
+          result.code || 'PERIOD_MARK_PAID_FAILED'
+        );
+      }
+      const detail = await loadSalaryPeriodDetail(periodId);
+      return sendOk(res, {
+        batchesUpdated: result.batchesUpdated || 0,
+        alreadyPaid: result.alreadyPaid === true,
+        detail: detail.data || null,
+      });
+    }
+
+    const salaryPeriodDetailMatch = sub.match(/^admin\/salary-periods\/([^/]+)$/);
+    if (salaryPeriodDetailMatch && method === 'GET') {
+      const auth = await requireAdmin(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const periodId = String(salaryPeriodDetailMatch[1] || '').trim();
+      if (!periodId) return sendError(res, 400, 'Period id required', 'INVALID_ID');
+      const result = await loadSalaryPeriodDetail(periodId);
+      if (!result.success || !result.data) {
+        const status = String(result.error || '').includes('not found') ? 404 : 500;
+        return sendError(
+          res,
+          status,
+          result.error || 'Failed to load salary period',
+          'SALARY_PERIOD_FAILED'
+        );
+      }
+      return sendOk(res, result.data);
+    }
+
+    // -----------------------------------------------------------------------
     // HOST routes
     // -----------------------------------------------------------------------
+    if (sub === 'host/salary-estimate-preview' && method === 'GET') {
+      const auth = await requireAuth(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const hostId = authProfileId(auth);
+      if (!hostId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+      const result = await buildSalaryEstimatePreview({
+        scope: 'host',
+        actorUserId: hostId,
+      });
+      if (!result.success || !result.data) {
+        return sendError(
+          res,
+          500,
+          result.error || 'Failed to build salary estimate',
+          'SALARY_ESTIMATE_FAILED'
+        );
+      }
+      return sendOk(res, result.data);
+    }
+
     if (sub === 'host/salary-status' && method === 'GET') {
       const auth = await requireAuth(req);
       if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
@@ -1585,9 +2038,13 @@ async function handleFinance(fullPath, req, res) {
       const byBatch = new Map();
       for (const line of lines || []) {
         const bid = String(line.batch_id);
-        const prev = byBatch.get(bid) || { salaryStatus: 'paid', lineCount: 0 };
+        const st = normalizePayeeSalaryStatus(line.host_salary_status);
+        const mapped =
+          st === 'acknowledged' ? 'acknowledged' : st === 'admin_paid' ? 'admin_paid' : 'unpaid';
+        const prev = byBatch.get(bid) || { salaryStatus: 'acknowledged', lineCount: 0 };
         prev.lineCount += 1;
-        if (line.host_salary_status !== 'paid') prev.salaryStatus = 'pending';
+        const rank = { unpaid: 0, admin_paid: 1, acknowledged: 2 };
+        if (rank[mapped] < rank[prev.salaryStatus]) prev.salaryStatus = mapped;
         byBatch.set(bid, prev);
       }
 
@@ -1606,12 +2063,50 @@ async function handleFinance(fullPath, req, res) {
             batchKind: batch.batch_kind,
             batchStatus: batch.status,
             salaryStatus: agg.salaryStatus,
+            canAcknowledge: agg.salaryStatus === 'admin_paid',
           };
         })
         .filter(Boolean)
         .slice(0, limit);
 
       return sendOk(res, { items });
+    }
+
+    const hostAckMatch = sub.match(/^host\/salary\/([^/]+)\/acknowledge$/);
+    if (hostAckMatch && method === 'POST') {
+      const auth = await requireAuth(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const hostId = authProfileId(auth);
+      const batchId = String(hostAckMatch[1] || '').trim();
+      if (!hostId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+      if (!batchId) return sendError(res, 400, 'Batch id required', 'INVALID_ID');
+      const result = await acknowledgePayeeSalary({
+        batchId,
+        actorUserId: hostId,
+        note: typeof body.note === 'string' ? body.note : undefined,
+      });
+      if (!result.success) {
+        const status =
+          result.code === 'NOT_FOUND'
+            ? 404
+            : result.code === 'FORBIDDEN'
+              ? 403
+              : result.code === 'INVALID_TRANSITION'
+                ? 409
+                : 400;
+        return sendError(
+          res,
+          status,
+          result.error || 'Acknowledge failed',
+          result.code || 'HOST_ACK_FAILED'
+        );
+      }
+      return sendOk(res, {
+        acknowledged: true,
+        alreadyAcknowledged: result.alreadyPaid === true,
+      });
     }
 
     if (sub === 'host/period-earnings' && method === 'GET') {
@@ -1679,9 +2174,14 @@ async function handleFinance(fullPath, req, res) {
           const periodLines = linesByPeriod.get(pid) || [];
           if (!periodLines.length) return null;
           const breakdown = summarizeHostSettlementLines(periodLines);
-          const salaryStatus = periodLines.some((l) => l.host_salary_status !== 'paid')
-            ? 'pending'
-            : 'paid';
+          const statuses = periodLines.map((l) =>
+            normalizePayeeSalaryStatus(l.host_salary_status)
+          );
+          const salaryStatus = statuses.some((s) => s === 'pending')
+            ? 'unpaid'
+            : statuses.some((s) => s === 'admin_paid')
+              ? 'admin_paid'
+              : 'acknowledged';
           return {
             periodId: pid,
             cycleType: p.cycle_type,
@@ -1698,6 +2198,85 @@ async function handleFinance(fullPath, req, res) {
         .slice(0, limit);
 
       return sendOk(res, { periods: result });
+    }
+
+    // -----------------------------------------------------------------------
+    // GET /earnings-overview — role-scoped Platform / TL / Host KPIs
+    // -----------------------------------------------------------------------
+    if (sub === 'earnings-overview' && method === 'GET') {
+      const auth = await requireAuth(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const scope = qstr(req, 'scope');
+      if (scope !== 'platform' && scope !== 'tl' && scope !== 'host') {
+        return sendError(res, 400, 'scope must be platform|tl|host', 'INVALID_SCOPE');
+      }
+      const access = await resolveEarningsScopeAccess({
+        scope,
+        actorId: authProfileId(auth),
+        actorRole: authRole(auth),
+        userId: qstr(req, 'userId') || qstr(req, 'user_id') || null,
+        teamLeaderId: qstr(req, 'teamLeaderId') || qstr(req, 'team_leader_id') || null,
+      });
+      if (!access.ok) {
+        return sendError(res, access.status, access.message, access.code);
+      }
+      const data = await buildEarningsOverview({
+        scope: access.scope,
+        userIds: access.userIds,
+        teamLeaderId: access.teamLeaderId,
+        client,
+      });
+      return sendOk(res, data);
+    }
+
+    // -----------------------------------------------------------------------
+    // GET /earnings-ledger — week / month / lifetime ledger
+    // -----------------------------------------------------------------------
+    if (sub === 'earnings-ledger' && method === 'GET') {
+      const auth = await requireAuth(req);
+      if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+      const client = requireDb(res);
+      if (!client) return undefined;
+      const scope = qstr(req, 'scope');
+      if (scope !== 'platform' && scope !== 'tl' && scope !== 'host') {
+        return sendError(res, 400, 'scope must be platform|tl|host', 'INVALID_SCOPE');
+      }
+      const mode = qstr(req, 'mode') || 'week';
+      if (mode !== 'week' && mode !== 'month' && mode !== 'lifetime') {
+        return sendError(res, 400, 'mode must be week|month|lifetime', 'INVALID_MODE');
+      }
+      const groupBy = qstr(req, 'groupBy') === 'month' ? 'month' : 'week';
+      const periodKey = qstr(req, 'periodKey') || qstr(req, 'period_key') || null;
+      const limit = Math.min(Math.max(Number(qstr(req, 'limit') || req.query?.limit) || 200, 1), 500);
+      const access = await resolveEarningsScopeAccess({
+        scope,
+        actorId: authProfileId(auth),
+        actorRole: authRole(auth),
+        userId: qstr(req, 'userId') || qstr(req, 'user_id') || null,
+        teamLeaderId: qstr(req, 'teamLeaderId') || qstr(req, 'team_leader_id') || null,
+      });
+      if (!access.ok) {
+        return sendError(res, access.status, access.message, access.code);
+      }
+      try {
+        const data = await buildEarningsLedger({
+          scope: access.scope,
+          userIds: access.userIds,
+          mode,
+          groupBy,
+          periodKey,
+          limit,
+          client,
+        });
+        return sendOk(res, data);
+      } catch (err) {
+        if (err && err.code === 'INVALID_PERIOD_KEY') {
+          return sendError(res, 400, err.message || 'Invalid periodKey', 'INVALID_PERIOD_KEY');
+        }
+        throw err;
+      }
     }
 
     return send(res, 404, {

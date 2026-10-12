@@ -1145,7 +1145,8 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                         ? 'bg-pink-500/20 border-pink-500/40 text-pink-300'
                         : getUserRoleLabel(currentUser) === 'Male User'
                           ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
-                          : getUserRoleLabel(currentUser) === 'Team Leader'
+                          : currentUser.role === 'team_leader' ||
+                            currentUser.role === 'agency_manager'
                             ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
                             : getUserRoleLabel(currentUser) === 'Admin'
                               ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'

@@ -19,9 +19,22 @@ const {
   testEmailConnection,
   sendTransactionalEmail,
   isSmtpConfigured,
+  getPasswordPolicyError,
 } = require('./helpers');
 const { granularResetDb, isFactoryResetAllowed } = require('./granularResetDb');
 const { listServerDiagnosticModules, runServerDiagnostic } = require('./systemDiagnostics');
+const { listK6SmokeScenarios, runK6Smoke } = require('./k6Smoke');
+const {
+  OFFICE_FEATURES,
+  allPermissionKeys,
+  sanitizePermissionKeys,
+  mapRoleRow,
+  resolveActorAccess,
+  actorHasPermission,
+  actorCanManageRbac,
+  permissionForAdminPath,
+  slugKey,
+} = require('./officeRbacLib.cjs');
 
 function livekitEnv() {
   return {
@@ -137,6 +150,47 @@ async function requireAdmin(req) {
   return auth;
 }
 
+/** Admin + optional office feature permission (legacy office_role_id NULL = super). */
+async function requireAdminFeature(req, featureKey) {
+  const auth = await requireAdmin(req);
+  if (auth.ok === false) return auth;
+  if (!featureKey) return auth;
+  const client = createServiceClient();
+  if (!client) {
+    // Fail open only when DB unavailable would already break the route; treat as forbidden for gated features
+    return {
+      ok: false,
+      status: 503,
+      error: { message: 'Supabase not configured', code: 'SUPABASE_NOT_CONFIGURED' },
+    };
+  }
+  try {
+    const access = await resolveActorAccess(client, auth);
+    if (!actorHasPermission(access, featureKey)) {
+      return {
+        ok: false,
+        status: 403,
+        error: {
+          message: 'You do not have permission for this admin feature.',
+          code: 'OFFICE_PERMISSION_DENIED',
+        },
+      };
+    }
+  } catch (e) {
+    // Missing office_* tables → legacy full admin (same as /me)
+    const msg = String((e && e.message) || '');
+    if (/office_roles|office_role_permissions|office_role_id|does not exist|42P01/i.test(msg)) {
+      return auth;
+    }
+    return {
+      ok: false,
+      status: 500,
+      error: { message: 'Permission check failed', code: 'OFFICE_RBAC_ERROR' },
+    };
+  }
+  return auth;
+}
+
 async function handleAdmin(path, req, res) {
   if (!String(path || '').startsWith('admin/')) return null;
   if (path === 'admin/create-team-leader') return null; // standalone
@@ -158,7 +212,7 @@ async function handleAdmin(path, req, res) {
         error: { message: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' },
       });
     }
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = (await readJsonBody(req)) || {};
     const moduleId = String(body.moduleId || '').trim();
@@ -188,8 +242,57 @@ async function handleAdmin(path, req, res) {
     }
   }
 
+  if (path === 'admin/k6-smoke') {
+    if (req.method === 'OPTIONS') {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+    if (req.method !== 'POST') {
+      return send(res, 405, {
+        success: false,
+        error: { message: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' },
+      });
+    }
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const body = (await readJsonBody(req)) || {};
+    const scenarioId = String(body.scenarioId || '').trim();
+    const host =
+      (req.headers && (req.headers['x-forwarded-host'] || req.headers.host)) || '';
+    const proto =
+      (req.headers && req.headers['x-forwarded-proto']) || 'https';
+    const authorization =
+      (req.headers && (req.headers.authorization || req.headers.Authorization)) || '';
+    try {
+      const result = await runK6Smoke(scenarioId, {
+        authorization,
+        concurrency: body.concurrency,
+        baseUrl: body.baseUrl,
+        host: Array.isArray(host) ? host[0] : host,
+        proto: Array.isArray(proto) ? proto[0] : proto,
+      });
+      if (!result) {
+        return send(res, 400, {
+          success: false,
+          error: {
+            message: `Unknown k6 smoke scenario. Known: ${listK6SmokeScenarios().join(', ')}`,
+            code: 'UNKNOWN_SCENARIO',
+          },
+        });
+      }
+      return send(res, 200, { success: true, data: result });
+    } catch (err) {
+      console.error('[k6-smoke]', scenarioId, (err && err.message) || err);
+      return send(res, 500, {
+        success: false,
+        error: { message: 'k6 smoke failed', code: 'K6_SMOKE_FAILED' },
+      });
+    }
+  }
+
   if (path === 'admin/infra-config' && (req.method === 'GET' || req.method === 'POST')) {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const supabase = getSupabaseEnv();
     const r2 = r2Env();
@@ -255,7 +358,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/email' && req.method === 'GET') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const client = auth.client || createServiceClient();
     const env = getEmailEnvStatus();
@@ -288,7 +391,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/email/settings' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = await readJsonBody(req);
     // Never accept API keys / SMTP secrets from the browser
@@ -331,7 +434,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/email/templates' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = await readJsonBody(req);
     try {
@@ -350,7 +453,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/email/test' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = await readJsonBody(req);
     const result = await testEmailConnection({
@@ -361,7 +464,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/email/logs' && req.method === 'GET') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const { data, error } = await auth.client
       .from('email_dispatch_log')
@@ -378,7 +481,7 @@ async function handleAdmin(path, req, res) {
 
   // Env-only status (replaces secret-pasting email-config for Vercel)
   if (path === 'admin/email-config' && req.method === 'GET') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const env = getEmailEnvStatus();
     const policy = await getEmailPolicy(auth.client);
@@ -399,7 +502,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/email-config' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = await readJsonBody(req);
     if (body && (body.pass || body.resendApiKey || body.host || body.user)) {
@@ -431,7 +534,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/delete-user' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = await readJsonBody(req);
     const userId = String((body && body.userId) || '').trim();
@@ -474,7 +577,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/override-earning-rate' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = await readJsonBody(req);
     const creatorId = String((body && body.creatorId) || '').trim();
@@ -497,7 +600,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/active-calls' && req.method === 'GET') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     // Vercel has no in-memory activeCalls — return recent in-progress call_logs if any
     const { data } = await auth.client
@@ -510,7 +613,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/terminate-call' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = await readJsonBody(req);
     const callId = String((body && (body.callId || body.id)) || '').trim();
@@ -585,7 +688,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/issue-warning' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = await readJsonBody(req);
     const callId = String((body && body.callId) || '').trim();
@@ -648,7 +751,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/livekit/spectator-token' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = await readJsonBody(req);
     const roomName = String((body && body.roomName) || '').trim();
@@ -700,7 +803,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/cms/seed-defaults' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     await readJsonBody(req);
     // Idempotent: insert defaults only if tables empty
@@ -744,7 +847,7 @@ async function handleAdmin(path, req, res) {
       /^admin\/cms\/(banners|quick-links)\/([^/]+)\/active$/
     );
     if (activeMatch && req.method === 'PATCH') {
-      const auth = await requireAdmin(req);
+      const auth = await requireAdminFeature(req, permissionForAdminPath(path));
       if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
       const table = activeMatch[1] === 'banners' ? 'home_banners' : 'home_quick_links';
       const id = activeMatch[2];
@@ -766,7 +869,7 @@ async function handleAdmin(path, req, res) {
       /^admin\/cms\/(banners|policies|quick-links)\/([^/]+)$/
     );
     if (delMatch && req.method === 'DELETE') {
-      const auth = await requireAdmin(req);
+      const auth = await requireAdminFeature(req, permissionForAdminPath(path));
       if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
       const kind = delMatch[1];
       const table =
@@ -783,7 +886,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/cms/nav-items/batch' && (req.method === 'PUT' || req.method === 'POST')) {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const body = await readJsonBody(req);
     const audienceRole = String((body && body.audienceRole) || '');
@@ -849,7 +952,7 @@ async function handleAdmin(path, req, res) {
       path === 'admin/cms/quick-links') &&
     (req.method === 'GET' || req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')
   ) {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const table =
       path === 'admin/cms/banners'
@@ -885,7 +988,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/schema' && req.method === 'GET') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     // Read-only: serve bundled supabase_schema.sql when present in the deployment
     const fs = require('fs');
@@ -933,7 +1036,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/factory-reset-status' && req.method === 'GET') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     const allowed = isFactoryResetAllowed();
     return send(res, 200, {
@@ -955,7 +1058,7 @@ async function handleAdmin(path, req, res) {
   }
 
   if (path === 'admin/granular-reset' && req.method === 'POST') {
-    const auth = await requireAdmin(req);
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
     if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
     if (!isFactoryResetAllowed()) {
       return send(res, 403, {
@@ -988,6 +1091,548 @@ async function handleAdmin(path, req, res) {
       warnings: result.warnings || [],
       r2PurgeRequested: Boolean(result.r2PurgeRequested),
       r2Purged: false,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // OFFICE RBAC — roles, permissions, office users (Control Center)
+  // -------------------------------------------------------------------------
+  if (path === 'admin/office-rbac/features' && req.method === 'GET') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    return send(res, 200, { success: true, data: { features: OFFICE_FEATURES } });
+  }
+
+  if (path === 'admin/office-rbac/me' && req.method === 'GET') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const client = createServiceClient();
+    if (!client) {
+      return send(res, 503, {
+        success: false,
+        error: { message: 'Supabase not configured', code: 'SUPABASE_NOT_CONFIGURED' },
+      });
+    }
+    const access = await resolveActorAccess(client, auth);
+    return send(res, 200, {
+      success: true,
+      data: {
+        isSuper: access.isSuper,
+        permissions: access.permissions,
+        officeRoleId: access.officeRoleId,
+        role: access.role,
+        features: OFFICE_FEATURES,
+      },
+    });
+  }
+
+  if (path === 'admin/office-rbac/roles' && req.method === 'GET') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const client = createServiceClient();
+    if (!client) {
+      return send(res, 503, {
+        success: false,
+        error: { message: 'Supabase not configured', code: 'SUPABASE_NOT_CONFIGURED' },
+      });
+    }
+    const access = await resolveActorAccess(client, auth);
+    if (access.schemaMissing) {
+      return send(res, 503, {
+        success: false,
+        error: {
+          message:
+            'Office RBAC tables are missing. In Supabase SQL Editor, run the OFFICE RBAC block at the end of supabase_schema.sql, then refresh.',
+          code: 'OFFICE_RBAC_SCHEMA_MISSING',
+          detail: access.schemaError || null,
+        },
+      });
+    }
+    if (!actorCanManageRbac(access)) {
+      return send(res, 403, {
+        success: false,
+        error: { message: 'Roles & Permissions access required.', code: 'FORBIDDEN' },
+      });
+    }
+    const { data: roles, error } = await client
+      .from('office_roles')
+      .select('*')
+      .order('label', { ascending: true });
+    if (error) {
+      const schemaMissing = /does not exist|schema cache|42P01|office_roles/i.test(error.message || '');
+      return send(res, schemaMissing ? 503 : 500, {
+        success: false,
+        error: {
+          message: schemaMissing
+            ? 'Office RBAC tables are missing. In Supabase SQL Editor, run the OFFICE RBAC block at the end of supabase_schema.sql, then refresh.'
+            : error.message,
+          code: schemaMissing ? 'OFFICE_RBAC_SCHEMA_MISSING' : 'ROLES_LOAD_FAILED',
+        },
+      });
+    }
+    const ids = (roles || []).map((r) => r.id);
+    const { data: perms } = ids.length
+      ? await client.from('office_role_permissions').select('role_id, permission_key').in('role_id', ids)
+      : { data: [] };
+    const byRole = new Map();
+    for (const p of perms || []) {
+      const list = byRole.get(p.role_id) || [];
+      list.push(String(p.permission_key));
+      byRole.set(p.role_id, list);
+    }
+    return send(res, 200, {
+      success: true,
+      data: {
+        roles: (roles || []).map((r) =>
+          mapRoleRow(r, r.is_super ? allPermissionKeys() : byRole.get(r.id) || [])
+        ),
+        features: OFFICE_FEATURES,
+      },
+    });
+  }
+
+  if (path === 'admin/office-rbac/roles' && req.method === 'POST') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const client = createServiceClient();
+    if (!client) {
+      return send(res, 503, {
+        success: false,
+        error: { message: 'Supabase not configured', code: 'SUPABASE_NOT_CONFIGURED' },
+      });
+    }
+    const access = await resolveActorAccess(client, auth);
+    if (!actorCanManageRbac(access)) {
+      return send(res, 403, {
+        success: false,
+        error: { message: 'Roles & Permissions access required.', code: 'FORBIDDEN' },
+      });
+    }
+    const body = await readJsonBody(req);
+    const label = clean(body.label);
+    let key = clean(body.key).toLowerCase() || slugKey(label);
+    const description = clean(body.description);
+    if (!label || !key) {
+      return send(res, 400, {
+        success: false,
+        error: { message: 'Label (and key) required.', code: 'INVALID' },
+      });
+    }
+    if (!/^[a-z][a-z0-9_]{1,47}$/.test(key)) {
+      return send(res, 400, {
+        success: false,
+        error: { message: 'Key must be snake_case letters/numbers.', code: 'INVALID_KEY' },
+      });
+    }
+    const now = new Date().toISOString();
+    const { data: created, error } = await client
+      .from('office_roles')
+      .insert({
+        key,
+        label,
+        description,
+        is_super: false,
+        is_system: false,
+        created_at: now,
+        updated_at: now,
+      })
+      .select('*')
+      .single();
+    if (error) {
+      const status = /duplicate|unique/i.test(error.message) ? 409 : 500;
+      return send(res, status, {
+        success: false,
+        error: { message: error.message, code: status === 409 ? 'KEY_EXISTS' : 'CREATE_FAILED' },
+      });
+    }
+    const permissions = sanitizePermissionKeys(body.permissions);
+    if (permissions.length) {
+      await client.from('office_role_permissions').insert(
+        permissions.map((permission_key) => ({ role_id: created.id, permission_key }))
+      );
+    }
+    return send(res, 200, {
+      success: true,
+      data: { role: mapRoleRow(created, permissions) },
+    });
+  }
+
+  const roleIdMatch = path.match(/^admin\/office-rbac\/roles\/([^/]+)$/);
+  if (roleIdMatch && (req.method === 'PUT' || req.method === 'DELETE')) {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const client = createServiceClient();
+    if (!client) {
+      return send(res, 503, {
+        success: false,
+        error: { message: 'Supabase not configured', code: 'SUPABASE_NOT_CONFIGURED' },
+      });
+    }
+    const access = await resolveActorAccess(client, auth);
+    if (!actorCanManageRbac(access)) {
+      return send(res, 403, {
+        success: false,
+        error: { message: 'Roles & Permissions access required.', code: 'FORBIDDEN' },
+      });
+    }
+    const roleId = String(roleIdMatch[1] || '').trim();
+    const { data: existing } = await client
+      .from('office_roles')
+      .select('*')
+      .eq('id', roleId)
+      .maybeSingle();
+    if (!existing) {
+      return send(res, 404, {
+        success: false,
+        error: { message: 'Role not found', code: 'NOT_FOUND' },
+      });
+    }
+
+    if (req.method === 'DELETE') {
+      if (existing.is_system || existing.is_super) {
+        return send(res, 400, {
+          success: false,
+          error: { message: 'System / super roles cannot be deleted.', code: 'SYSTEM_ROLE' },
+        });
+      }
+      const { error } = await client.from('office_roles').delete().eq('id', roleId);
+      if (error) {
+        return send(res, 500, {
+          success: false,
+          error: { message: error.message, code: 'DELETE_FAILED' },
+        });
+      }
+      return send(res, 200, { success: true, data: { deleted: true } });
+    }
+
+    const body = await readJsonBody(req);
+    const label = clean(body.label) || existing.label;
+    const description =
+      body.description !== undefined ? clean(body.description) : String(existing.description || '');
+    const { data: updated, error } = await client
+      .from('office_roles')
+      .update({ label, description, updated_at: new Date().toISOString() })
+      .eq('id', roleId)
+      .select('*')
+      .single();
+    if (error) {
+      return send(res, 500, {
+        success: false,
+        error: { message: error.message, code: 'UPDATE_FAILED' },
+      });
+    }
+    let permissions;
+    if (Array.isArray(body.permissions)) {
+      if (existing.is_super) {
+        permissions = allPermissionKeys();
+      } else {
+        permissions = sanitizePermissionKeys(body.permissions);
+        await client.from('office_role_permissions').delete().eq('role_id', roleId);
+        if (permissions.length) {
+          await client.from('office_role_permissions').insert(
+            permissions.map((permission_key) => ({ role_id: roleId, permission_key }))
+          );
+        }
+      }
+    } else {
+      const { data: perms } = await client
+        .from('office_role_permissions')
+        .select('permission_key')
+        .eq('role_id', roleId);
+      permissions = existing.is_super
+        ? allPermissionKeys()
+        : (perms || []).map((p) => String(p.permission_key));
+    }
+    return send(res, 200, {
+      success: true,
+      data: { role: mapRoleRow(updated, permissions) },
+    });
+  }
+
+  if (path === 'admin/office-rbac/users' && req.method === 'GET') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const client = createServiceClient();
+    if (!client) {
+      return send(res, 503, {
+        success: false,
+        error: { message: 'Supabase not configured', code: 'SUPABASE_NOT_CONFIGURED' },
+      });
+    }
+    const access = await resolveActorAccess(client, auth);
+    if (!actorCanManageRbac(access)) {
+      return send(res, 403, {
+        success: false,
+        error: { message: 'Roles & Permissions access required.', code: 'FORBIDDEN' },
+      });
+    }
+    const { data: users, error } = await client
+      .from('profiles')
+      .select('id, name, email, role, office_role_id, created_at, updated_at, is_banned')
+      .eq('role', 'admin')
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) {
+      return send(res, 500, {
+        success: false,
+        error: { message: error.message, code: 'USERS_LOAD_FAILED' },
+      });
+    }
+    const { data: roles } = await client.from('office_roles').select('id, key, label, is_super');
+    const roleById = new Map((roles || []).map((r) => [String(r.id), r]));
+    return send(res, 200, {
+      success: true,
+      data: {
+        users: (users || []).map((u) => {
+          const or = u.office_role_id ? roleById.get(String(u.office_role_id)) : null;
+          return {
+            id: String(u.id),
+            name: u.name || null,
+            email: u.email || null,
+            role: 'admin',
+            officeRoleId: u.office_role_id ? String(u.office_role_id) : null,
+            officeRoleKey: or?.key || null,
+            officeRoleLabel: or ? or.label : u.office_role_id ? 'Unknown role' : 'Legacy Super Admin',
+            isSuper: !u.office_role_id || or?.is_super === true,
+            isBanned: u.is_banned === true,
+            createdAt: u.created_at || null,
+            updatedAt: u.updated_at || null,
+          };
+        }),
+      },
+    });
+  }
+
+  if (path === 'admin/office-rbac/users' && req.method === 'POST') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const client = createServiceClient();
+    if (!client) {
+      return send(res, 503, {
+        success: false,
+        error: { message: 'Supabase not configured', code: 'SUPABASE_NOT_CONFIGURED' },
+      });
+    }
+    const access = await resolveActorAccess(client, auth);
+    if (!actorCanManageRbac(access)) {
+      return send(res, 403, {
+        success: false,
+        error: { message: 'Roles & Permissions access required.', code: 'FORBIDDEN' },
+      });
+    }
+    const body = await readJsonBody(req);
+    const name = clean(body.name);
+    const email = clean(body.email).toLowerCase();
+    const password = typeof body.password === 'string' ? body.password : '';
+    const officeRoleId = clean(body.officeRoleId || body.office_role_id);
+    if (!name || !email || !email.includes('@')) {
+      return send(res, 400, {
+        success: false,
+        error: { message: 'Name and valid email required.', code: 'INVALID' },
+      });
+    }
+    const pwError = getPasswordPolicyError(password);
+    if (pwError) {
+      return send(res, 400, {
+        success: false,
+        error: { message: pwError, code: 'PASSWORD_POLICY' },
+      });
+    }
+    if (!officeRoleId) {
+      return send(res, 400, {
+        success: false,
+        error: { message: 'Office role is required.', code: 'ROLE_REQUIRED' },
+      });
+    }
+    const { data: officeRole } = await client
+      .from('office_roles')
+      .select('id, key, label, is_super')
+      .eq('id', officeRoleId)
+      .maybeSingle();
+    if (!officeRole) {
+      return send(res, 400, {
+        success: false,
+        error: { message: 'Office role not found.', code: 'ROLE_NOT_FOUND' },
+      });
+    }
+
+    const { data: existingProfile } = await client
+      .from('profiles')
+      .select('id, email')
+      .ilike('email', email)
+      .maybeSingle();
+    if (existingProfile?.id) {
+      return send(res, 409, {
+        success: false,
+        error: {
+          message: `A profile already exists for ${email}.`,
+          code: 'EMAIL_EXISTS',
+        },
+      });
+    }
+
+    const { data: createdAuth, error: createErr } = await client.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        role: 'admin',
+        gender: 'other',
+        name,
+        full_name: name,
+      },
+    });
+    if (createErr || !createdAuth?.user?.id) {
+      const msg = (createErr && createErr.message) || 'Failed to create Auth user';
+      const code = /already/i.test(msg) ? 'EMAIL_EXISTS' : 'AUTH_CREATE_FAILED';
+      return send(res, code === 'EMAIL_EXISTS' ? 409 : 500, {
+        success: false,
+        error: { message: msg, code },
+      });
+    }
+
+    const authUserId = createdAuth.user.id;
+    const now = new Date().toISOString();
+    const profileRow = {
+      id: authUserId,
+      auth_id: authUserId,
+      name,
+      email,
+      gender: 'other',
+      gender_locked: true,
+      role: 'admin',
+      office_role_id: officeRole.id,
+      age: 30,
+      nationality: 'United States',
+      country_code: 'US',
+      bio: `Office staff — ${officeRole.label}`,
+      interests: [],
+      tags: ['Office', officeRole.label],
+      spoken_languages: ['English'],
+      avatar_url:
+        'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=400',
+      gallery: [],
+      is_verified: true,
+      is_onboarded: true,
+      agreed_to_terms: true,
+      online_status: 'offline',
+      coin_balance: 0,
+      hourly_coin_rate: 0,
+      earnings_coins: 0,
+      has_password_set: true,
+      created_at: now,
+      updated_at: now,
+    };
+    const { error: upsertErr } = await client.from('profiles').upsert(profileRow, {
+      onConflict: 'id',
+    });
+    if (upsertErr) {
+      try {
+        await client.auth.admin.deleteUser(authUserId);
+      } catch (_) {
+        /* ignore */
+      }
+      return send(res, 500, {
+        success: false,
+        error: {
+          message: upsertErr.message || 'Failed to create office user profile',
+          code: 'PROFILE_UPSERT_FAILED',
+        },
+      });
+    }
+    await client
+      .from('profiles')
+      .update({
+        role: 'admin',
+        office_role_id: officeRole.id,
+        auth_id: authUserId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', authUserId);
+
+    return send(res, 200, {
+      success: true,
+      data: {
+        user: {
+          id: authUserId,
+          name,
+          email,
+          role: 'admin',
+          officeRoleId: String(officeRole.id),
+          officeRoleKey: officeRole.key,
+          officeRoleLabel: officeRole.label,
+          isSuper: officeRole.is_super === true,
+        },
+      },
+      message: `Office user ${name} created. They can sign in with ${email}.`,
+    });
+  }
+
+  const assignMatch = path.match(/^admin\/office-rbac\/users\/([^/]+)$/);
+  if (assignMatch && req.method === 'PATCH') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const client = createServiceClient();
+    if (!client) {
+      return send(res, 503, {
+        success: false,
+        error: { message: 'Supabase not configured', code: 'SUPABASE_NOT_CONFIGURED' },
+      });
+    }
+    const access = await resolveActorAccess(client, auth);
+    if (!actorCanManageRbac(access)) {
+      return send(res, 403, {
+        success: false,
+        error: { message: 'Roles & Permissions access required.', code: 'FORBIDDEN' },
+      });
+    }
+    const userId = String(assignMatch[1] || '').trim();
+    const body = await readJsonBody(req);
+    const officeRoleId =
+      body.officeRoleId === null || body.office_role_id === null
+        ? null
+        : clean(body.officeRoleId || body.office_role_id) || null;
+
+    const { data: target } = await client
+      .from('profiles')
+      .select('id, role, email')
+      .eq('id', userId)
+      .maybeSingle();
+    if (!target || String(target.role) !== 'admin') {
+      return send(res, 404, {
+        success: false,
+        error: { message: 'Office user not found', code: 'NOT_FOUND' },
+      });
+    }
+    if (officeRoleId) {
+      const { data: officeRole } = await client
+        .from('office_roles')
+        .select('id')
+        .eq('id', officeRoleId)
+        .maybeSingle();
+      if (!officeRole) {
+        return send(res, 400, {
+          success: false,
+          error: { message: 'Office role not found.', code: 'ROLE_NOT_FOUND' },
+        });
+      }
+    }
+    const { error } = await client
+      .from('profiles')
+      .update({
+        office_role_id: officeRoleId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', userId);
+    if (error) {
+      return send(res, 500, {
+        success: false,
+        error: { message: error.message, code: 'UPDATE_FAILED' },
+      });
+    }
+    return send(res, 200, {
+      success: true,
+      data: { userId, officeRoleId },
     });
   }
 

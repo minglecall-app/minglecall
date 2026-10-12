@@ -12,6 +12,7 @@ import {
   DEFAULT_COIN_BURN_RATE_PER_MIN,
   DEFAULT_COIN_BURN_RATE_FRIEND_PER_MIN,
 } from '../../shared/finance/economyBurn';
+import { groupLiveLedgerRowsByCall } from '../../shared/finance/groupWalletLedgerByCall';
 
 export interface EarningsDataPoint {
   period: string;
@@ -614,6 +615,7 @@ const MALE_SPENDER_LEDGER_TYPES = new Set([
 
 /**
  * Build wallet ledger entries from authoritative wallet_ledger rows.
+ * Call debits are grouped per call (one row with total coins / minutes).
  */
 export function mapWalletLedgerRows(
   rows: Array<{
@@ -628,11 +630,28 @@ export function mapWalletLedgerRows(
     createdAt?: string;
   }>
 ): WalletLedgerEntry[] {
-  return rows.map((row) => {
-    const isDebit = row.transactionType === 'CALL_DEBIT' || Number(row.amount) < 0;
+  const grouped = groupLiveLedgerRowsByCall(
+    rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      callId: row.callId ?? null,
+      transactionType: row.transactionType,
+      amountCoins: Number(row.amount) || 0,
+      balanceAfter: Number(row.balanceAfter) || 0,
+      billingMinute: row.billingMinute,
+      metadata: row.metadata,
+      createdAt: row.createdAt || '',
+    }))
+  );
+
+  return grouped.map((row) => {
+    const isDebit = row.transactionType === 'CALL_DEBIT' || Number(row.amountCoins) < 0;
+    const mins = row.billedMinutes;
     const title =
       row.transactionType === 'CALL_DEBIT'
-        ? `Call billing · minute ${row.billingMinute ?? '?'}`
+        ? mins != null && mins > 0
+          ? `Call billing · ${mins} min`
+          : `Call billing · minute ${row.billingMinute ?? '?'}`
         : row.transactionType === 'REWARD_STREAK'
         ? 'Daily streak reward'
         : row.transactionType === 'REWARD_MISSION'
@@ -652,7 +671,7 @@ export function mapWalletLedgerRows(
       category,
       title,
       description: row.callId ? `Call ${row.callId}` : undefined,
-      coins: Number(row.amount) || 0,
+      coins: Number(row.amountCoins) || 0,
       balanceAfter: Number(row.balanceAfter) || 0,
       timestamp: row.createdAt ? new Date(row.createdAt).toLocaleString() : 'Recent',
       referenceId: row.callId || row.id,

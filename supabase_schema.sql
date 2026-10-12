@@ -824,6 +824,127 @@ INSERT INTO public.home_quick_links (
   ('link_safety_policy', 'Safety Center', 'Policies & Reporting', 'ShieldCheck', 'INFO', 'policy', 'policy_safety', 'from-indigo-500 to-cyan-600', 6, true)
 ON CONFLICT (id) DO NOTHING;
 
+-- ============================================================================
+-- 10b. PAYOUT METHOD TEMPLATES (CMS) + USER PAYOUT CARDS
+-- Admin defines field templates per method; hosts/TLs save local remittance details.
+-- Mutations via backend service-role APIs only (RLS denies client writes).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.payout_method_templates (
+    method_key TEXT PRIMARY KEY CHECK (method_key IN ('paypal', 'bank_account', 'wallet')),
+    label TEXT NOT NULL,
+    icon TEXT NOT NULL DEFAULT 'Wallet',
+    description TEXT NOT NULL DEFAULT '',
+    is_enabled BOOLEAN NOT NULL DEFAULT true,
+    countries_mode TEXT NOT NULL DEFAULT 'all' CHECK (countries_mode IN ('all', 'selected')),
+    country_codes TEXT[] NOT NULL DEFAULT '{}',
+    fields_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.user_payout_cards (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id TEXT NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    method_key TEXT NOT NULL CHECK (method_key IN ('paypal', 'bank_account', 'wallet')),
+    country_code VARCHAR(8) NOT NULL,
+    values_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_primary BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, method_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_payout_cards_user ON public.user_payout_cards(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_payout_cards_method ON public.user_payout_cards(method_key);
+CREATE INDEX IF NOT EXISTS idx_user_payout_cards_primary
+  ON public.user_payout_cards(user_id) WHERE is_primary = true;
+
+COMMENT ON TABLE public.payout_method_templates IS
+  'Admin CMS templates for PayPal / Bank / Wallet payout field sets and country availability.';
+COMMENT ON TABLE public.user_payout_cards IS
+  'Host/TL saved local remittance details (one card per method). Read/write via backend APIs only.';
+
+INSERT INTO public.payout_method_templates (
+  method_key, label, icon, description, is_enabled, countries_mode, country_codes, fields_json, sort_order
+) VALUES
+(
+  'paypal',
+  'PayPal',
+  'Wallet',
+  'PayPal wallet remittance for period-end local salary payments.',
+  true,
+  'all',
+  '{}',
+  '[
+    {"id":"pp_email","key":"email","label":"PayPal Email","type":"email","required":true,"placeholder":"name@example.com"},
+    {"id":"pp_name","key":"account_name","label":"Account Name","type":"text","required":true,"placeholder":"Full name on PayPal"},
+    {"id":"pp_phone","key":"phone","label":"Contact Phone","type":"phone","required":false,"placeholder":"Country code + number"}
+  ]'::jsonb,
+  1
+),
+(
+  'bank_account',
+  'Bank Account',
+  'Landmark',
+  'Bank wire / IBAN details for local salary transfers.',
+  true,
+  'all',
+  '{}',
+  '[
+    {"id":"ba_holder","key":"account_holder","label":"Account Holder","type":"text","required":true,"placeholder":"Name as on bank account"},
+    {"id":"ba_bank","key":"bank_name","label":"Bank Name","type":"text","required":true,"placeholder":"Bank name"},
+    {"id":"ba_iban","key":"iban_or_account","label":"IBAN / Account Number","type":"text","required":true,"placeholder":"IBAN or account number"},
+    {"id":"ba_swift","key":"swift_bic","label":"SWIFT / BIC","type":"text","required":false,"placeholder":"Optional"},
+    {"id":"ba_routing","key":"routing_number","label":"Routing Number","type":"text","required":false,"placeholder":"Optional"},
+    {"id":"ba_branch","key":"branch","label":"Branch","type":"text","required":false,"placeholder":"Optional"},
+    {"id":"ba_phone","key":"phone","label":"Contact Phone","type":"phone","required":false,"placeholder":"Country code + number"}
+  ]'::jsonb,
+  2
+),
+(
+  'wallet',
+  'Wallets',
+  'Smartphone',
+  'E-wallets and crypto addresses for local remittance.',
+  true,
+  'all',
+  '{}',
+  '[
+    {"id":"w_type","key":"wallet_type","label":"Wallet Type","type":"select","required":true,"options":["USDT TRC20","USDT ERC20","GCash","PIX","Revolut","Other"]},
+    {"id":"w_addr","key":"address_or_id","label":"Wallet Address / Account ID","type":"text","required":true,"placeholder":"Address or account ID"},
+    {"id":"w_name","key":"account_name","label":"Account Name","type":"text","required":false,"placeholder":"Optional"},
+    {"id":"w_phone","key":"phone","label":"Phone Number","type":"phone","required":false,"placeholder":"Optional"}
+  ]'::jsonb,
+  3
+)
+ON CONFLICT (method_key) DO NOTHING;
+
+-- Ensure contact phone field exists on bank/PayPal templates (idempotent for existing DBs).
+UPDATE public.payout_method_templates
+SET fields_json = fields_json || '[{"id":"ba_phone","key":"phone","label":"Contact Phone","type":"phone","required":false,"placeholder":"Country code + number"}]'::jsonb,
+    updated_at = NOW()
+WHERE method_key = 'bank_account'
+  AND NOT EXISTS (
+    SELECT 1 FROM jsonb_array_elements(fields_json) AS f
+    WHERE f->>'key' = 'phone'
+  );
+
+UPDATE public.payout_method_templates
+SET fields_json = fields_json || '[{"id":"pp_phone","key":"phone","label":"Contact Phone","type":"phone","required":false,"placeholder":"Country code + number"}]'::jsonb,
+    updated_at = NOW()
+WHERE method_key = 'paypal'
+  AND NOT EXISTS (
+    SELECT 1 FROM jsonb_array_elements(fields_json) AS f
+    WHERE f->>'key' = 'phone'
+  );
+
+ALTER TABLE public.payout_method_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_payout_cards ENABLE ROW LEVEL SECURITY;
+
+-- No client policies: deny-by-default for anon/authenticated; service-role APIs only.
+DROP POLICY IF EXISTS "public select payout_method_templates" ON public.payout_method_templates;
+DROP POLICY IF EXISTS "public select user_payout_cards" ON public.user_payout_cards;
 
 CREATE TABLE IF NOT EXISTS public.app_nav_items (
     id TEXT PRIMARY KEY,
@@ -2218,6 +2339,13 @@ CREATE TABLE IF NOT EXISTS public.settlement_batches (
     total_tl_commission_coins BIGINT NOT NULL DEFAULT 0,
     currency TEXT NOT NULL DEFAULT 'USD',
     payment_reference TEXT,
+    reconcile_status TEXT NOT NULL DEFAULT 'unreconciled'
+      CHECK (reconcile_status IN ('unreconciled', 'reconciled')),
+    reconciled_at TIMESTAMPTZ,
+    reconciled_by TEXT REFERENCES public.profiles(id) ON DELETE SET NULL,
+    reconciled_by_role TEXT CHECK (
+      reconciled_by_role IS NULL OR reconciled_by_role IN ('admin', 'team_leader')
+    ),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT settlement_batches_tl_required_for_bundle CHECK (
@@ -2230,6 +2358,40 @@ CREATE TABLE IF NOT EXISTS public.settlement_batches (
       AND total_tl_commission_usd >= 0
     )
 );
+
+-- Reconcile columns on databases created before salary-reconcile flow
+ALTER TABLE public.settlement_batches
+  ADD COLUMN IF NOT EXISTS reconcile_status TEXT NOT NULL DEFAULT 'unreconciled';
+ALTER TABLE public.settlement_batches
+  ADD COLUMN IF NOT EXISTS reconciled_at TIMESTAMPTZ;
+ALTER TABLE public.settlement_batches
+  ADD COLUMN IF NOT EXISTS reconciled_by TEXT REFERENCES public.profiles(id) ON DELETE SET NULL;
+ALTER TABLE public.settlement_batches
+  ADD COLUMN IF NOT EXISTS reconciled_by_role TEXT;
+
+DO $$
+BEGIN
+  IF to_regclass('public.settlement_batches') IS NULL THEN
+    RETURN;
+  END IF;
+  ALTER TABLE public.settlement_batches
+    DROP CONSTRAINT IF EXISTS settlement_batches_reconcile_status_check;
+  ALTER TABLE public.settlement_batches
+    ADD CONSTRAINT settlement_batches_reconcile_status_check
+    CHECK (reconcile_status IN ('unreconciled', 'reconciled'));
+  ALTER TABLE public.settlement_batches
+    DROP CONSTRAINT IF EXISTS settlement_batches_reconciled_by_role_check;
+  ALTER TABLE public.settlement_batches
+    ADD CONSTRAINT settlement_batches_reconciled_by_role_check
+    CHECK (
+      reconciled_by_role IS NULL OR reconciled_by_role IN ('admin', 'team_leader')
+    );
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_settlement_batches_reconcile
+  ON public.settlement_batches (period_id, reconcile_status);
 
 -- One TL bundle per period per team leader
 CREATE UNIQUE INDEX IF NOT EXISTS uq_settlement_batches_period_tl_bundle
@@ -2249,7 +2411,9 @@ CREATE INDEX IF NOT EXISTS idx_settlement_batches_tl
   ON public.settlement_batches (team_leader_id, created_at DESC);
 
 COMMENT ON TABLE public.settlement_batches IS
-  'Period-end remittance batches. team_leader_bundle = one admin payment covering TL commission + all managed host salaries; direct_host = admin pays host directly. Amounts immutable after insert; status changes via settlement_events.';
+  'Period-end remittance batches. Must reconcile before pay. team_leader_bundle: Admin remits to Agency then Agency marks host lines paid; direct_host: Admin marks host paid. Amounts immutable after insert; status/reconcile via settlement_events.';
+COMMENT ON COLUMN public.settlement_batches.reconcile_status IS
+  'unreconciled|reconciled — must be reconciled before Admin remittance or Agency host mark-paid.';
 
 CREATE TABLE IF NOT EXISTS public.settlement_line_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2268,7 +2432,7 @@ CREATE TABLE IF NOT EXISTS public.settlement_line_items (
     )),
     breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
     host_salary_status TEXT NOT NULL DEFAULT 'pending'
-      CHECK (host_salary_status IN ('pending', 'paid')),
+      CHECK (host_salary_status IN ('pending', 'admin_paid', 'acknowledged')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT settlement_line_items_amount_non_negative CHECK (
       amount_coins >= 0 AND amount_usd >= 0
@@ -2310,7 +2474,26 @@ CREATE INDEX IF NOT EXISTS idx_settlement_line_items_host_status
   WHERE payee_role = 'host';
 
 COMMENT ON TABLE public.settlement_line_items IS
-  'Immutable line components inside a settlement batch (host salary parts, TL commission, target bonuses). host_salary_status is host-facing pending|paid only.';
+  'Immutable line components inside a settlement batch (host salary parts, TL commission, target bonuses). host_salary_status is payee-facing pending|admin_paid|acknowledged for hosts and TL lines.';
+
+-- Widen host_salary_status on databases created before ack model (pending|paid → pending|admin_paid|acknowledged).
+DO $$
+BEGIN
+  IF to_regclass('public.settlement_line_items') IS NULL THEN
+    RETURN;
+  END IF;
+
+  UPDATE public.settlement_line_items
+  SET host_salary_status = 'acknowledged'
+  WHERE host_salary_status = 'paid';
+
+  ALTER TABLE public.settlement_line_items
+    DROP CONSTRAINT IF EXISTS settlement_line_items_host_salary_status_check;
+
+  ALTER TABLE public.settlement_line_items
+    ADD CONSTRAINT settlement_line_items_host_salary_status_check
+    CHECK (host_salary_status IN ('pending', 'admin_paid', 'acknowledged'));
+END $$;
 
 -- Append-only audit trail for batch / period settlement actions
 CREATE TABLE IF NOT EXISTS public.settlement_events (
@@ -2319,16 +2502,45 @@ CREATE TABLE IF NOT EXISTS public.settlement_events (
     period_id UUID REFERENCES public.settlement_periods(id) ON DELETE SET NULL,
     event_type TEXT NOT NULL CHECK (event_type IN (
       'created',
+      'reconciled',
       'admin_marked_paid',
+      'agency_marked_host_paid',
       'tl_confirmed',
       'cancelled',
-      'note'
+      'note',
+      'host_acknowledged',
+      'tl_acknowledged'
     )),
     actor_user_id TEXT NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
     note TEXT,
     payload JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Widen settlement_events.event_type on databases created before reconcile events.
+DO $$
+BEGIN
+  IF to_regclass('public.settlement_events') IS NULL THEN
+    RETURN;
+  END IF;
+
+  ALTER TABLE public.settlement_events
+    DROP CONSTRAINT IF EXISTS settlement_events_event_type_check;
+
+  ALTER TABLE public.settlement_events
+    ADD CONSTRAINT settlement_events_event_type_check
+    CHECK (event_type IN (
+      'created',
+      'reconciled',
+      'admin_marked_paid',
+      'agency_marked_host_paid',
+      'tl_confirmed',
+      'cancelled',
+      'note',
+      'host_acknowledged',
+      'tl_acknowledged'
+    ));
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_settlement_events_batch_created
   ON public.settlement_events (batch_id, created_at DESC);
@@ -4102,3 +4314,129 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 GRANT EXECUTE ON FUNCTION public.gift_spend_atomic(TEXT, TEXT, TEXT, INT, INT, INT, TEXT, JSONB) TO postgres, service_role;
 GRANT EXECUTE ON FUNCTION public.complete_coin_purchase_atomic(TEXT, INT, TEXT, UUID, JSONB) TO postgres, service_role;
+
+-- =============================================================================
+-- OFFICE RBAC (Minglecall staff only — not TL / male / female / host marketplace roles)
+-- profiles.role stays 'admin' for console access; office_role_id scopes features.
+-- Legacy admins with office_role_id NULL keep full (super) access.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS public.office_roles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    key TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    is_super BOOLEAN NOT NULL DEFAULT false,
+    is_system BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.office_role_permissions (
+    role_id UUID NOT NULL REFERENCES public.office_roles(id) ON DELETE CASCADE,
+    permission_key TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (role_id, permission_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_office_role_permissions_key
+  ON public.office_role_permissions(permission_key);
+
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS office_role_id UUID REFERENCES public.office_roles(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_profiles_office_role_id ON public.profiles(office_role_id);
+
+COMMENT ON TABLE public.office_roles IS
+  'Staff roles for Admin Control Center (Accounts, Manager, etc.). Marketplace roles unchanged.';
+COMMENT ON TABLE public.office_role_permissions IS
+  'Feature permission keys granted to an office role (see shared/officeRbac/features.ts).';
+COMMENT ON COLUMN public.profiles.office_role_id IS
+  'When role=admin: scopes Control Center features. NULL = legacy full admin.';
+
+ALTER TABLE public.office_roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.office_role_permissions ENABLE ROW LEVEL SECURITY;
+
+-- Deny-by-default for clients; mutations via service-role backend only.
+DROP POLICY IF EXISTS "office_roles_no_client" ON public.office_roles;
+CREATE POLICY "office_roles_no_client" ON public.office_roles
+  FOR ALL TO anon, authenticated
+  USING (false)
+  WITH CHECK (false);
+
+DROP POLICY IF EXISTS "office_role_permissions_no_client" ON public.office_role_permissions;
+CREATE POLICY "office_role_permissions_no_client" ON public.office_role_permissions
+  FOR ALL TO anon, authenticated
+  USING (false)
+  WITH CHECK (false);
+
+INSERT INTO public.office_roles (key, label, description, is_super, is_system)
+VALUES
+  (
+    'super_admin',
+    'Super Admin',
+    'Full Admin Control Center access. Cannot be deleted.',
+    true,
+    true
+  ),
+  (
+    'accounts',
+    'Accounts',
+    'Finance, salary batches, funding, and payout operations.',
+    false,
+    true
+  ),
+  (
+    'manager',
+    'Manager',
+    'People ops, analytics, creator ops, and CMS — no infra destructive actions.',
+    false,
+    true
+  )
+ON CONFLICT (key) DO NOTHING;
+
+-- Seed Accounts permissions (idempotent)
+INSERT INTO public.office_role_permissions (role_id, permission_key)
+SELECT r.id, p.permission_key
+FROM public.office_roles r
+CROSS JOIN (
+  VALUES
+    ('finance-module'),
+    ('finance-module:overview'),
+    ('finance-module:salary_batches'),
+    ('finance-module:live_ledger'),
+    ('finance-module:platform'),
+    ('finance-module:team_leaders'),
+    ('finance-module:hosts'),
+    ('finance-module:funding'),
+    ('finance-module:batches'),
+    ('finance-module:settlement'),
+    ('finance-module:period'),
+    ('financials'),
+    ('payouts'),
+    ('cms-payout-cards'),
+    ('analytics'),
+    ('analytics:finance')
+) AS p(permission_key)
+WHERE r.key = 'accounts'
+ON CONFLICT DO NOTHING;
+
+-- Seed Manager permissions
+INSERT INTO public.office_role_permissions (role_id, permission_key)
+SELECT r.id, p.permission_key
+FROM public.office_roles r
+CROSS JOIN (
+  VALUES
+    ('analytics'),
+    ('monitoring'),
+    ('users'),
+    ('leaders'),
+    ('creator-ops'),
+    ('countries'),
+    ('gifts'),
+    ('skus'),
+    ('cms'),
+    ('cms-navigation'),
+    ('email'),
+    ('api-health')
+) AS p(permission_key)
+WHERE r.key = 'manager'
+ON CONFLICT DO NOTHING;

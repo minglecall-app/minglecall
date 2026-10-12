@@ -16,6 +16,7 @@ import {
   Loader2,
   AlertTriangle,
   Coins,
+  LayoutDashboard,
 } from 'lucide-react';
 import { useApp } from '../../../context/AppContext';
 import {
@@ -23,7 +24,6 @@ import {
   fetchFinanceBatch,
   fetchFinanceBatches,
   fetchCurrentFinancePeriod,
-  fetchFinanceLedger,
   fetchFinancePeriods,
   patchFinanceConfig,
   postAdminMarkBatchPaid,
@@ -33,17 +33,20 @@ import {
   fetchFinanceLiveLedger,
   type LiveWalletLedgerRow,
   type LiveWalletLedgerAggregates,
+  type FinanceAdminSummary,
   postSimulateGatewayPurchase,
 } from '../../../services/financeApi';
 import {
-  labelFinancialEntryType,
   labelSettlementComponent,
-  summarizeHostFinancialLedgerRows,
   summarizeHostSettlementLines,
 } from '../../../../shared/finance/hostEarningsBreakdown';
 import { HostPeriodEarningsBreakdown } from '../../finance/HostPeriodEarningsBreakdown';
+import { EarningsPeriodDashboard } from '../../finance/EarningsPeriodDashboard';
+import { AdminSalaryBatchesPage } from './AdminSalaryBatchesPage';
 
 type FinanceHubTab =
+  | 'overview'
+  | 'salary_batches'
   | 'live_ledger'
   | 'platform'
   | 'team_leaders'
@@ -54,15 +57,32 @@ type FinanceHubTab =
   | 'period';
 
 const TABS: { id: FinanceHubTab; label: string; icon: React.ReactNode }[] = [
+  { id: 'overview', label: 'Overview', icon: <LayoutDashboard className="w-3.5 h-3.5" /> },
+  { id: 'salary_batches', label: 'Salary reconcile', icon: <Wallet className="w-3.5 h-3.5" /> },
   { id: 'live_ledger', label: 'Live ledger', icon: <Coins className="w-3.5 h-3.5" /> },
   { id: 'platform', label: 'Platform earnings', icon: <Landmark className="w-3.5 h-3.5" /> },
-  { id: 'team_leaders', label: 'Team leader earnings', icon: <Building2 className="w-3.5 h-3.5" /> },
+  { id: 'team_leaders', label: 'Agency earnings', icon: <Building2 className="w-3.5 h-3.5" /> },
   { id: 'hosts', label: 'Host earnings', icon: <Users className="w-3.5 h-3.5" /> },
   { id: 'funding', label: 'Funding / Purchases', icon: <Coins className="w-3.5 h-3.5" /> },
   { id: 'batches', label: 'Payout / settlement requests', icon: <Wallet className="w-3.5 h-3.5" /> },
   { id: 'settlement', label: 'Payment settlement', icon: <Banknote className="w-3.5 h-3.5" /> },
   { id: 'period', label: 'Period & close settings', icon: <CalendarClock className="w-3.5 h-3.5" /> },
 ];
+
+function KpiCard(props: {
+  label: string;
+  value: string;
+  hint?: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
+      <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">{props.label}</div>
+      <div className={`text-xl font-black mt-1 ${props.valueClassName || 'text-white'}`}>{props.value}</div>
+      {props.hint ? <div className="text-[10px] text-slate-500 mt-1 font-mono">{props.hint}</div> : null}
+    </div>
+  );
+}
 
 function formatUsd(n: number | undefined | null) {
   const v = Number(n) || 0;
@@ -94,7 +114,7 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
   navPlacement = 'inline',
 }) => {
   const { showToast, coinPackages, users } = useApp();
-  const [tabInternal, setTabInternal] = useState<FinanceHubTab>('live_ledger');
+  const [tabInternal, setTabInternal] = useState<FinanceHubTab>('overview');
   const tab = tabProp ?? tabInternal;
   const setTab = (next: FinanceHubTab) => {
     onTabChange?.(next);
@@ -103,10 +123,9 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [summary, setSummary] = useState<any>(null);
+  const [summary, setSummary] = useState<FinanceAdminSummary | null>(null);
   const [periods, setPeriods] = useState<any[]>([]);
   const [currentPeriod, setCurrentPeriod] = useState<any>(null);
-  const [ledger, setLedger] = useState<any[]>([]);
   const [batches, setBatches] = useState<any[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [batchDetail, setBatchDetail] = useState<any>(null);
@@ -139,24 +158,6 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
   const liveLedgerRowsRef = useRef(liveLedgerRows);
   liveLedgerRowsRef.current = liveLedgerRows;
   const liveLedgerReqIdRef = useRef(0);
-
-  const hostLedgerByUser = useMemo(() => {
-    if (tab !== 'hosts') return [] as Array<{ userId: string; breakdown: ReturnType<typeof summarizeHostFinancialLedgerRows> }>;
-    const byUser = new Map<string, any[]>();
-    for (const row of ledger) {
-      const uid = String(row.userId || '');
-      if (!uid) continue;
-      const list = byUser.get(uid) || [];
-      list.push(row);
-      byUser.set(uid, list);
-    }
-    return Array.from(byUser.entries())
-      .map(([userId, rows]) => ({
-        userId,
-        breakdown: summarizeHostFinancialLedgerRows(rows),
-      }))
-      .sort((a, b) => b.breakdown.totalUsd - a.breakdown.totalUsd);
-  }, [tab, ledger]);
 
   const batchHostBreakdowns = useMemo(() => {
     const lines = (batchDetail?.lineItems || []).filter((li: any) => li.payeeRole === 'host');
@@ -199,54 +200,6 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
     if (batchRes.success) setBatches(batchRes.data?.batches || []);
     setLoading(false);
   }, []);
-
-  const loadLedgerForTab = useCallback(async (hubTab: FinanceHubTab) => {
-    const entryType =
-      hubTab === 'platform'
-        ? 'PLATFORM_EARN'
-        : hubTab === 'team_leaders'
-          ? 'TL_EARN'
-          : hubTab === 'hosts'
-            ? undefined
-            : undefined;
-
-    if (hubTab !== 'platform' && hubTab !== 'team_leaders' && hubTab !== 'hosts') return;
-
-    const periodId = currentPeriod?.period?.id;
-    if (hubTab === 'hosts') {
-      const [hostRes, bonusRes, trueUpRes] = await Promise.all([
-        fetchFinanceLedger({
-          entryType: 'HOST_EARN',
-          periodId: summary?.periodId || periodId || undefined,
-          limit: 150,
-        }),
-        fetchFinanceLedger({
-          entryType: 'TARGET_BONUS',
-          periodId: summary?.periodId || periodId || undefined,
-          limit: 150,
-        }),
-        fetchFinanceLedger({
-          entryType: 'TARGET_SHARE_TRUEUP',
-          periodId: summary?.periodId || periodId || undefined,
-          limit: 150,
-        }),
-      ]);
-      const merged = [
-        ...(hostRes.data?.entries || []),
-        ...(bonusRes.data?.entries || []),
-        ...(trueUpRes.data?.entries || []),
-      ].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-      setLedger(merged);
-      return;
-    }
-
-    const res = await fetchFinanceLedger({
-      entryType,
-      periodId: summary?.periodId || periodId || undefined,
-      limit: 200,
-    });
-    setLedger(res.data?.entries || []);
-  }, [currentPeriod, summary]);
 
   useEffect(() => {
     void loadCore();
@@ -329,13 +282,10 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
     if (tab === 'live_ledger') {
       void loadLiveLedger();
     }
-    if (tab === 'platform' || tab === 'team_leaders' || tab === 'hosts') {
-      void loadLedgerForTab(tab);
-    }
     if (tab === 'funding') {
       void loadFunding();
     }
-  }, [tab, loadLedgerForTab, loadFunding, loadLiveLedger]);
+  }, [tab, loadFunding, loadLiveLedger]);
 
   useEffect(() => {
     if (!selectedBatchId) {
@@ -421,45 +371,27 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
     if (detail.success) setBatchDetail(detail.data);
   };
 
+  const isEarningsTab = tab === 'platform' || tab === 'team_leaders' || tab === 'hosts';
+
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-4 bg-gradient-to-r from-[#161922] via-[#1A1D2B] to-[#12141F] border border-emerald-500/30 rounded-2xl">
-        <div>
-          <div className="flex items-center gap-2">
-            <Landmark className="w-5 h-5 text-emerald-400" />
-            <h2 className="text-lg font-black text-white">Financial Module</h2>
-            </div>
-          <p className="text-xs text-slate-400 mt-1">
-            Period settlements, immutable ledger, and admin remittance — all amounts from{' '}
-            <span className="font-mono text-emerald-300">/api/v1/finance</span>.
-          </p>
+      {!isEarningsTab ? (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => {
+              void loadCore();
+              if (tab === 'live_ledger') void applyLiveTextFiltersAndRefresh();
+              if (tab === 'funding') void loadFunding();
+            }}
+            disabled={loading || busyAction || liveLedgerRefreshing}
+            className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-2 hover:bg-slate-800 cursor-pointer disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Refresh
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            void loadCore();
-            if (tab === 'live_ledger') void applyLiveTextFiltersAndRefresh();
-            if (tab === 'funding') void loadFunding();
-          }}
-          disabled={loading || busyAction || liveLedgerRefreshing}
-          className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-2 hover:bg-slate-800 cursor-pointer disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-          Refresh
-        </button>
-      </div>
-
-      <div className="px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700/80 text-[11px] text-slate-300 font-mono leading-relaxed space-y-1">
-        <div>
-          <span className="text-amber-300 font-bold">Funding</span> = coin purchases / admin credits ·{' '}
-          <span className="text-indigo-300 font-bold">Live ledger</span> = CALL_DEBIT / GIFT_DEBIT /
-          HOST_EARN / TL_EARN / TARGET_SHARE_TRUEUP (USD via Fixed Peg) ·{' '}
-          <span className="text-emerald-300 font-bold">Settlement</span> = closed-period Platform/Host/TL + remittance batches.
-        </div>
-        <div className="text-slate-500">
-              Analytics Hub is ops-only. Coin Burn & Economy is rates only. This module is the cash book.
-        </div>
-      </div>
+      ) : null}
 
       {error && (
         <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-700/50 text-rose-200 text-xs flex items-center gap-2">
@@ -467,32 +399,6 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
           <span>{error}</span>
         </div>
       )}
-
-      {/* Summary strip — Platform / Host / TL always separate (never combined) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Platform retained</div>
-          <div className="text-xl font-black text-amber-300 mt-1">{formatUsd(summary?.platformEarnedUsd)}</div>
-          <div className="text-[10px] text-slate-500 mt-1 font-mono">ledger PLATFORM_EARN</div>
-        </div>
-        <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Host payable</div>
-          <div className="text-xl font-black text-emerald-300 mt-1">{formatUsd(summary?.totalDueToDirectHostsUsd)}</div>
-          <div className="text-[10px] text-slate-500 mt-1 font-mono">{directHosts.length} direct-host batch(es)</div>
-        </div>
-        <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">TL payable</div>
-          <div className="text-xl font-black text-indigo-300 mt-1">{formatUsd(summary?.totalDueToTeamLeadersUsd)}</div>
-          <div className="text-[10px] text-slate-500 mt-1 font-mono">{tlBundles.length} TL bundle batch(es)</div>
-        </div>
-        <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Outstanding</div>
-          <div className="text-xl font-black text-rose-300 mt-1">{formatUsd(summary?.outstandingDueUsd)}</div>
-          <div className="text-[10px] text-slate-500 mt-1 font-mono">
-            {summary?.outstandingBatchCount ?? 0} pending_admin_pay
-          </div>
-        </div>
-      </div>
 
       {navPlacement !== 'sidebar' && (
         <div className="bg-[#12151F] border border-slate-800 rounded-2xl p-2 flex flex-wrap gap-2">
@@ -514,39 +420,237 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
         </div>
       )}
 
+      {tab === 'salary_batches' && <AdminSalaryBatchesPage />}
+
+      {tab === 'overview' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-white">Finance overview</h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Live open-period accruals from wallet_ledger · settlement books from financial_ledger after close.
+              </p>
+            </div>
+            <span className="text-[10px] font-mono text-slate-500">
+              peg {Number(summary?.live?.coinUsdPeg ?? summary?.period?.coinUsdPeg ?? 0).toFixed(4)} · next close{' '}
+              {formatWhen(summary?.live?.nextCloseAt || summary?.period?.nextCloseAt)}
+            </span>
+          </div>
+
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-2">
+              Live open period (wallet_ledger)
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <KpiCard
+                label="Platform retained"
+                value={formatUsd(summary?.live?.platformRetainedUsd)}
+                hint={`${formatCoins(summary?.live?.platformRetainedCoins)} · open window`}
+                valueClassName="text-amber-300"
+              />
+              <KpiCard
+                label="Host accrued"
+                value={formatUsd(summary?.live?.hostPayableUsd)}
+                hint={`${formatCoins(summary?.live?.hostEarnCoins)} · HOST_EARN`}
+                valueClassName="text-emerald-300"
+              />
+              <KpiCard
+                label="Agency accrued"
+                value={formatUsd(summary?.live?.tlPayableUsd)}
+                hint={`${formatCoins(summary?.live?.tlEarnCoins)} · TL_EARN`}
+                valueClassName="text-indigo-300"
+              />
+              <KpiCard
+                label="Burn volume"
+                value={formatUsd(
+                  (Number(summary?.live?.callDebitUsd) || 0) + (Number(summary?.live?.giftDebitUsd) || 0)
+                )}
+                hint={`${formatCoins(
+                  (Number(summary?.live?.callDebitCoins) || 0) + (Number(summary?.live?.giftDebitCoins) || 0)
+                )} · CALL+GIFT debit`}
+                valueClassName="text-cyan-300"
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-2">
+              Funding (open period completed purchases)
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <KpiCard
+                label="Coins funded"
+                value={formatCoins(summary?.funding?.completedCoins)}
+                hint={`${summary?.funding?.completedCount ?? 0} completed row(s)`}
+                valueClassName="text-amber-300"
+              />
+              <KpiCard
+                label="Cash paid"
+                value={formatUsd(summary?.funding?.paidUsd)}
+                hint="retail amount_usd"
+                valueClassName="text-emerald-300"
+              />
+              <KpiCard
+                label="Peg value"
+                value={formatUsd(summary?.funding?.pegValueUsd)}
+                hint="coins × peg snapshot"
+                valueClassName="text-cyan-300"
+              />
+              <KpiCard
+                label="Load margin"
+                value={formatUsd(summary?.funding?.loadMarginUsd)}
+                hint="paid − peg value"
+                valueClassName={
+                  (Number(summary?.funding?.loadMarginUsd) || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'
+                }
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-2">
+              Settlement books
+              {summary?.settlementPeriodStatus
+                ? ` · ${summary.settlementPeriodStatus} period`
+                : summary?.periodId
+                  ? ''
+                  : ' · no closed period yet'}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <KpiCard
+                label="Platform earned (closed)"
+                value={formatUsd(summary?.platformEarnedUsd)}
+                hint="financial_ledger PLATFORM_EARN"
+                valueClassName="text-amber-300"
+              />
+              <KpiCard
+                label="Host accrued (closed)"
+                value={formatUsd(summary?.hostAccruedUsd)}
+                hint="HOST_EARN + TRUEUP + BONUS"
+                valueClassName="text-emerald-300"
+              />
+              <KpiCard
+                label="Agency accrued (closed)"
+                value={formatUsd(summary?.tlAccruedUsd)}
+                hint="financial_ledger TL_EARN"
+                valueClassName="text-indigo-300"
+              />
+              <KpiCard
+                label="Batch due (period)"
+                value={formatUsd(
+                  (Number(summary?.totalDueToDirectHostsUsd) || 0) +
+                    (Number(summary?.totalDueToTeamLeadersUsd) || 0)
+                )}
+                hint={`${directHosts.length} direct · ${tlBundles.length} TL bundle`}
+                valueClassName="text-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-2">
+              Remittance queue (all periods)
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <KpiCard
+                label="Outstanding due"
+                value={formatUsd(summary?.remittanceAll?.outstandingDueUsd ?? summary?.outstandingDueUsd)}
+                hint={`${summary?.remittanceAll?.outstandingBatchCount ?? summary?.outstandingBatchCount ?? 0} pending_admin_pay`}
+                valueClassName="text-rose-300"
+              />
+              <KpiCard
+                label="Direct host pending"
+                value={String(summary?.remittanceAll?.directHostCount ?? directHosts.filter((b) => b.status === 'pending_admin_pay').length)}
+                hint={formatUsd(summary?.totalDueToDirectHostsUsd)}
+                valueClassName="text-emerald-300"
+              />
+              <KpiCard
+                label="Agency bundle pending"
+                value={String(summary?.remittanceAll?.tlBundleCount ?? tlBundles.filter((b) => b.status === 'pending_admin_pay').length)}
+                hint={formatUsd(summary?.totalDueToTeamLeadersUsd)}
+                valueClassName="text-indigo-300"
+              />
+              <KpiCard
+                label="Settlement enabled"
+                value={summary?.period?.settlementEnabled === false ? 'Off' : 'On'}
+                hint={`${summary?.period?.cycleType || '—'} · close ${summary?.period?.periodCloseUtcTime || '—'}`}
+                valueClassName={
+                  summary?.period?.settlementEnabled === false ? 'text-rose-300' : 'text-emerald-300'
+                }
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <div className="p-4 bg-[#161922] border border-slate-800 rounded-2xl space-y-2 text-xs font-mono">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold font-sans">
+                Open period clock
+              </div>
+              <div className="flex justify-between gap-2 border-b border-slate-800 pb-2">
+                <span className="text-slate-500">Start</span>
+                <span className="text-white">{formatWhen(summary?.period?.periodStart || summary?.live?.periodStart)}</span>
+              </div>
+              <div className="flex justify-between gap-2 border-b border-slate-800 pb-2">
+                <span className="text-slate-500">End (exclusive)</span>
+                <span className="text-white">{formatWhen(summary?.period?.periodEnd || summary?.live?.periodEnd)}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-500">Open period id</span>
+                <span className="text-slate-300 truncate max-w-[220px]">
+                  {summary?.openPeriodId || summary?.live?.periodId || '—'}
+                </span>
+              </div>
+            </div>
+            <div className="p-4 bg-[#161922] border border-slate-800 rounded-2xl space-y-2 text-xs font-mono">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold font-sans">
+                Settlement period in focus
+              </div>
+              <div className="flex justify-between gap-2 border-b border-slate-800 pb-2">
+                <span className="text-slate-500">Status</span>
+                <span className="text-white">{summary?.settlementPeriodStatus || '—'}</span>
+              </div>
+              <div className="flex justify-between gap-2 border-b border-slate-800 pb-2">
+                <span className="text-slate-500">Period id</span>
+                <span className="text-slate-300 truncate max-w-[220px]">{summary?.periodId || '—'}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-500">Payable truth</span>
+                <span className="text-emerald-300 truncate max-w-[220px]">
+                  {summary?.payableSourceOfTruth || 'settlement_line_items'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {tab === 'live_ledger' && (
         <div className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Platform retained</div>
-              <div className="text-xl font-black text-amber-300 mt-1">
-                {formatCoins(liveLedgerAgg?.platformRetainedCoins ?? 0)}
-              </div>
-              <div className="text-[10px] text-slate-500 mt-1 font-mono">
-                {formatUsd(liveLedgerAgg?.platformRetainedUsd ?? 0)}
-                {liveLedgerAgg?.coinUsdPeg != null
-                  ? ` · peg ${Number(liveLedgerAgg.coinUsdPeg).toFixed(4)}`
-                  : ''}
-              </div>
-            </div>
-            <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Host payable</div>
-              <div className="text-xl font-black text-emerald-300 mt-1">
-                {formatCoins(liveLedgerAgg?.hostEarnCoins ?? 0)}
-              </div>
-              <div className="text-[10px] text-slate-500 mt-1 font-mono">
-                {formatUsd(liveLedgerAgg?.hostPayableUsd ?? 0)}
-              </div>
-            </div>
-            <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">TL payable</div>
-              <div className="text-xl font-black text-indigo-300 mt-1">
-                {formatCoins(liveLedgerAgg?.tlEarnCoins ?? 0)}
-              </div>
-              <div className="text-[10px] text-slate-500 mt-1 font-mono">
-                {formatUsd(liveLedgerAgg?.tlPayableUsd ?? 0)}
-              </div>
-            </div>
+            <KpiCard
+              label="Platform retained (filter view)"
+              value={formatCoins(
+                liveLedgerAgg?.platformRetainedCoins ?? summary?.live?.platformRetainedCoins ?? 0
+              )}
+              hint={`${formatUsd(liveLedgerAgg?.platformRetainedUsd ?? summary?.live?.platformRetainedUsd ?? 0)}${
+                (liveLedgerAgg?.coinUsdPeg ?? summary?.live?.coinUsdPeg) != null
+                  ? ` · peg ${Number(liveLedgerAgg?.coinUsdPeg ?? summary?.live?.coinUsdPeg).toFixed(4)}`
+                  : ''
+              }`}
+              valueClassName="text-amber-300"
+            />
+            <KpiCard
+              label="Host earn (filter view)"
+              value={formatCoins(liveLedgerAgg?.hostEarnCoins ?? summary?.live?.hostEarnCoins ?? 0)}
+              hint={formatUsd(liveLedgerAgg?.hostPayableUsd ?? summary?.live?.hostPayableUsd ?? 0)}
+              valueClassName="text-emerald-300"
+            />
+            <KpiCard
+              label="Agency earn (filter view)"
+              value={formatCoins(liveLedgerAgg?.tlEarnCoins ?? summary?.live?.tlEarnCoins ?? 0)}
+              hint={formatUsd(liveLedgerAgg?.tlPayableUsd ?? summary?.live?.tlPayableUsd ?? 0)}
+              valueClassName="text-indigo-300"
+            />
           </div>
 
           <div className="bg-[#161922] border border-slate-800 rounded-2xl overflow-hidden">
@@ -666,7 +770,9 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
                           <div className="truncate max-w-[150px]">{row.userName || row.userId}</div>
                           <div className="text-[10px] text-slate-500 truncate max-w-[150px]">{row.userEmail || row.userId}</div>
                         </td>
-                        <td className="p-3 font-mono text-slate-500 truncate max-w-[140px]">{row.callId || '—'}</td>
+                        <td className="p-3 font-mono text-slate-500 truncate max-w-[140px]" title={row.callId || ''}>
+                          {row.callId ? `${row.callId.slice(0, 8)}…` : '—'}
+                        </td>
                         <td className="p-3 font-mono text-white">{formatCoins(row.amountCoins)}</td>
                         <td className="p-3 font-mono text-emerald-400">{formatCoins(row.balanceAfter)}</td>
                         <td className="p-3 font-mono text-slate-500">{row.billingMinute || '—'}</td>
@@ -675,6 +781,10 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
                   )}
                 </tbody>
               </table>
+              <p className="px-3 py-2 text-[10px] text-slate-500 border-t border-slate-800">
+                Ops detail: one wallet_ledger event per row (per billed minute / gift). Earnings tabs
+                use call-composite rows instead.
+              </p>
             </div>
           </div>
         </div>
@@ -683,6 +793,34 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
       {/* Funding / Purchases — wallet_ledger PURCHASE + coin_purchases */}
       {tab === 'funding' && (
         <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <KpiCard
+              label="Coins funded (open period)"
+              value={formatCoins(summary?.funding?.completedCoins)}
+              hint={`${summary?.funding?.completedCount ?? 0} completed`}
+              valueClassName="text-amber-300"
+            />
+            <KpiCard
+              label="Cash paid"
+              value={formatUsd(summary?.funding?.paidUsd)}
+              hint="completed amount_usd"
+              valueClassName="text-emerald-300"
+            />
+            <KpiCard
+              label="Peg value"
+              value={formatUsd(summary?.funding?.pegValueUsd)}
+              hint="coins × peg"
+              valueClassName="text-cyan-300"
+            />
+            <KpiCard
+              label="Load margin"
+              value={formatUsd(summary?.funding?.loadMarginUsd)}
+              hint="paid − peg value"
+              valueClassName={
+                (Number(summary?.funding?.loadMarginUsd) || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'
+              }
+            />
+          </div>
           <div className="bg-[#161922] border border-indigo-900/40 rounded-2xl px-4 py-3">
               <div className="text-xs font-bold text-indigo-200">Simulate GATEWAY purchase (non-production)</div>
               <p className="text-[10px] text-slate-500 mt-1 font-mono">
@@ -899,147 +1037,44 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
         </div>
       )}
 
-      {/* Ledger tabs — closed financial_ledger (PLATFORM / HOST / TL separate) */}
-      {(tab === 'platform' || tab === 'team_leaders' || tab === 'hosts') && (
-        <div className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {tab === 'platform' && (
-              <>
-                <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Platform retained</div>
-                  <div className="text-xl font-black text-amber-300 mt-1">
-                    {formatUsd(ledger.reduce((s, r) => s + (Number(r.amountUsd) || 0), 0))}
-                  </div>
-                  <div className="text-[10px] text-slate-500 mt-1 font-mono">
-                    {formatCoins(ledger.reduce((s, r) => s + (Number(r.amountCoins) || 0), 0))} · PLATFORM_EARN
-                  </div>
-                </div>
-                <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Period host accrued</div>
-                  <div className="text-xl font-black text-emerald-300 mt-1">{formatUsd(summary?.hostAccruedUsd)}</div>
-                  <div className="text-[10px] text-slate-500 mt-1 font-mono">HOST_EARN + TRUEUP + TARGET_BONUS</div>
-                </div>
-                <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Period TL accrued</div>
-                  <div className="text-xl font-black text-indigo-300 mt-1">{formatUsd(summary?.tlAccruedUsd)}</div>
-                  <div className="text-[10px] text-slate-500 mt-1 font-mono">TL_EARN</div>
-                </div>
-              </>
-            )}
-            {tab === 'hosts' && (
-              <>
-                <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl sm:col-span-2">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Host payable (tab filter)</div>
-                  <div className="text-xl font-black text-emerald-300 mt-1">
-                    {formatUsd(ledger.reduce((s, r) => s + (Number(r.amountUsd) || 0), 0))}
-                  </div>
-                  <div className="text-[10px] text-slate-500 mt-1 font-mono">
-                    {formatCoins(ledger.reduce((s, r) => s + (Number(r.amountCoins) || 0), 0))} · HOST_EARN + TRUEUP + TARGET_BONUS
-                  </div>
-                </div>
-                <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Rows</div>
-                  <div className="text-xl font-black text-white mt-1">{ledger.length}</div>
-                  <div className="text-[10px] text-slate-500 mt-1 font-mono">financial_ledger</div>
-                </div>
-              </>
-            )}
-            {tab === 'team_leaders' && (
-              <>
-                <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl sm:col-span-2">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">TL payable (tab filter)</div>
-                  <div className="text-xl font-black text-indigo-300 mt-1">
-                    {formatUsd(ledger.reduce((s, r) => s + (Number(r.amountUsd) || 0), 0))}
-                  </div>
-                  <div className="text-[10px] text-slate-500 mt-1 font-mono">
-                    {formatCoins(ledger.reduce((s, r) => s + (Number(r.amountCoins) || 0), 0))} · TL_EARN
-                  </div>
-                </div>
-                <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Rows</div>
-                  <div className="text-xl font-black text-white mt-1">{ledger.length}</div>
-                  <div className="text-[10px] text-slate-500 mt-1 font-mono">financial_ledger</div>
-                </div>
-              </>
-            )}
-          </div>
-
-          {tab === 'hosts' && hostLedgerByUser.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {hostLedgerByUser.map(({ userId, breakdown }) => {
-                const u = users.find((x) => x.id === userId);
-                return (
-                  <HostPeriodEarningsBreakdown
-                    key={userId}
-                    breakdown={breakdown}
-                    compact
-                    title={u?.name || 'Host'}
-                    subtitle={`${userId.slice(0, 8)}… · closed financial_ledger`}
-                  />
-                );
-              })}
-            </div>
-          )}
-
-          <div className="bg-[#161922] border border-slate-800 rounded-2xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-white">
-                {tab === 'platform' && 'Platform earnings ledger (PLATFORM_EARN)'}
-                {tab === 'team_leaders' && 'Team leader earnings ledger (TL_EARN)'}
-                {tab === 'hosts' &&
-                  'Host earnings + share true-up + tier bonuses (HOST_EARN / TARGET_SHARE_TRUEUP / TARGET_BONUS)'}
-              </h3>
-              <span className="text-[10px] font-mono text-slate-500">
-                period {summary?.periodId || currentPeriod?.period?.id || '—'}
-              </span>
-            </div>
-            <div className="overflow-x-auto max-h-[420px]">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-950/80 text-slate-400 sticky top-0">
-                  <tr>
-                    <th className="p-3 font-mono">When</th>
-                    <th className="p-3 font-mono">Type</th>
-                    <th className="p-3 font-mono">User</th>
-                    <th className="p-3 font-mono">Coins</th>
-                    <th className="p-3 font-mono">USD</th>
-                    <th className="p-3 font-mono">FX</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ledger.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="p-6 text-center text-slate-500">
-                        No closed ledger rows yet — run period close when due.
-                      </td>
-                    </tr>
-                  ) : (
-                    ledger.map((row) => (
-                      <tr key={row.id} className="border-t border-slate-800/80 hover:bg-slate-900/40">
-                        <td className="p-3 font-mono text-slate-400 whitespace-nowrap">{formatWhen(row.createdAt)}</td>
-                        <td className="p-3 font-mono text-amber-300" title={row.entryType}>
-                          {labelFinancialEntryType(String(row.entryType || ''))}
-                        </td>
-                        <td className="p-3 font-mono text-slate-300 truncate max-w-[140px]">{row.userId || '—'}</td>
-                        <td className="p-3 font-mono text-white">{formatCoins(row.amountCoins)}</td>
-                        <td className="p-3 font-mono text-emerald-400">{formatUsd(row.amountUsd)}</td>
-                        <td className="p-3 font-mono text-slate-500">{row.fxRatio}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Platform / TL / Host earnings — week·month·lifetime KPI + ledger */}
+      {tab === 'platform' && <EarningsPeriodDashboard scope="platform" accent="amber" />}
+      {tab === 'team_leaders' && <EarningsPeriodDashboard scope="tl" accent="indigo" />}
+      {tab === 'hosts' && <EarningsPeriodDashboard scope="host" accent="emerald" />}
 
       {/* Batches queue */}
       {tab === 'batches' && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <KpiCard
+              label="Outstanding due"
+              value={formatUsd(summary?.remittanceAll?.outstandingDueUsd ?? summary?.outstandingDueUsd)}
+              hint={`${summary?.remittanceAll?.outstandingBatchCount ?? summary?.outstandingBatchCount ?? 0} pending_admin_pay`}
+              valueClassName="text-rose-300"
+            />
+            <KpiCard
+              label="Direct host batches"
+              value={String(directHosts.length)}
+              hint={formatUsd(summary?.totalDueToDirectHostsUsd)}
+              valueClassName="text-emerald-300"
+            />
+            <KpiCard
+              label="Agency bundle batches"
+              value={String(tlBundles.length)}
+              hint={formatUsd(summary?.totalDueToTeamLeadersUsd)}
+              valueClassName="text-indigo-300"
+            />
+            <KpiCard
+              label="Loaded rows"
+              value={String(batches.length)}
+              hint={`paid ${summary?.batchCountsByStatus?.admin_paid ?? 0} · confirmed ${summary?.batchCountsByStatus?.tl_confirmed ?? 0}`}
+            />
+          </div>
         <div className="bg-[#161922] border border-slate-800 rounded-2xl overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-800">
             <h3 className="text-sm font-bold text-white">Settlement batches (payable queue)</h3>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              One TL bundle = TL commission + managed host salaries. Direct hosts are separate batches.
+              One Agency bundle = Agency commission + managed host salaries. Direct hosts are separate batches.
             </p>
           </div>
           <div className="overflow-x-auto max-h-[480px]">
@@ -1049,7 +1084,7 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
                   <th className="p-3">Kind</th>
                   <th className="p-3">Payee</th>
                   <th className="p-3">Host salary</th>
-                  <th className="p-3">TL commission</th>
+                  <th className="p-3">Agency commission</th>
                   <th className="p-3">Total due</th>
                   <th className="p-3">Status</th>
                   <th className="p-3">Created</th>
@@ -1090,10 +1125,34 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
             </table>
           </div>
         </div>
+        </div>
       )}
 
       {/* Payment settlement workspace */}
       {tab === 'settlement' && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <KpiCard
+              label="Pending remittance"
+              value={formatUsd(
+                pendingBatches.reduce((s, b) => s + (Number(b.totalDueUsd) || 0), 0)
+              )}
+              hint={`${pendingBatches.length} pending_admin_pay in loaded list`}
+              valueClassName="text-rose-300"
+            />
+            <KpiCard
+              label="All-period outstanding"
+              value={formatUsd(summary?.remittanceAll?.outstandingDueUsd)}
+              hint={`${summary?.remittanceAll?.outstandingBatchCount ?? 0} batches`}
+              valueClassName="text-rose-200"
+            />
+            <KpiCard
+              label="Selected batch"
+              value={selectedBatchId ? formatUsd(batchDetail?.batch?.totalDueUsd) : '—'}
+              hint={selectedBatchId ? batchDetail?.batch?.status || 'loading…' : 'pick a batch'}
+              valueClassName="text-emerald-300"
+            />
+          </div>
         <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
           <div className="xl:col-span-2 bg-[#161922] border border-slate-800 rounded-2xl overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-800">
@@ -1150,7 +1209,7 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
                     <div className="font-black text-white mt-1">{formatUsd(batchDetail.batch?.totalHostSalaryUsd)}</div>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                    <div className="text-slate-500">TL commission</div>
+                    <div className="text-slate-500">Agency commission</div>
                     <div className="font-black text-white mt-1">{formatUsd(batchDetail.batch?.totalTlCommissionUsd)}</div>
                   </div>
                   <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-700/40">
@@ -1235,10 +1294,40 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
             )}
           </div>
         </div>
+        </div>
       )}
 
       {/* Period & close settings */}
       {tab === 'period' && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <KpiCard
+              label="Cycle"
+              value={String(summary?.period?.cycleType || currentPeriod?.config?.creatorTargetCycle || '—')}
+              hint={`close ${summary?.period?.periodCloseUtcTime || closeTime} UTC`}
+              valueClassName="text-indigo-300"
+            />
+            <KpiCard
+              label="Next close"
+              value={formatWhen(summary?.period?.nextCloseAt || currentPeriod?.nextCloseAt)}
+              hint="period_end @ close clock"
+              valueClassName="text-emerald-300"
+            />
+            <KpiCard
+              label="Coin USD peg"
+              value={Number(summary?.period?.coinUsdPeg ?? 0).toFixed(4)}
+              hint="Fixed Peg"
+              valueClassName="text-amber-300"
+            />
+            <KpiCard
+              label="Settlement"
+              value={summary?.period?.settlementEnabled === false ? 'Off' : 'On'}
+              hint={summary?.openPeriodId ? `open ${String(summary.openPeriodId).slice(0, 8)}…` : 'no open period'}
+              valueClassName={
+                summary?.period?.settlementEnabled === false ? 'text-rose-300' : 'text-emerald-300'
+              }
+            />
+          </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="p-5 bg-[#161922] border border-slate-800 rounded-2xl space-y-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -1349,6 +1438,7 @@ export const AdminFinancialModule: React.FC<AdminFinancialModuleProps> = ({
               </div>
             </div>
           </div>
+        </div>
         </div>
       )}
     </div>

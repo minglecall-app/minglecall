@@ -3,6 +3,8 @@ import { useApp } from '../../context/AppContext';
 import { HostShell } from './HostShell';
 import { FemaleHostAnalyticsDashboard, type HostAnalyticsSection } from './FemaleHostAnalyticsDashboard';
 import { FemaleCallLogsView } from './FemaleCallLogsView';
+import { EarningsPeriodDashboard } from '../finance/EarningsPeriodDashboard';
+import { PayoutCardsPanel } from '../payout/PayoutCardsPanel';
 import {
   HostCallLogFilter,
   HostEarningsTimeframe,
@@ -22,7 +24,6 @@ interface HostDashboardProps {
   onOpenProfile?: (userId: string) => void;
 }
 
-const EARNINGS_TIMEFRAMES: HostEarningsTimeframe[] = ['daily', 'weekly', 'monthly', 'yearly'];
 const CALL_LOG_FILTERS: HostCallLogFilter[] = [
   'all',
   'missed',
@@ -30,10 +31,6 @@ const CALL_LOG_FILTERS: HostCallLogFilter[] = [
   'non_friends',
   'friends',
 ];
-
-function isEarningsTimeframe(v: string | undefined): v is HostEarningsTimeframe {
-  return Boolean(v && (EARNINGS_TIMEFRAMES as string[]).includes(v));
-}
 
 function isCallLogFilter(v: string | undefined): v is HostCallLogFilter {
   return Boolean(v && (CALL_LOG_FILTERS as string[]).includes(v));
@@ -106,14 +103,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
     }
 
     if (tab === 'earnings') {
-      const fallback = defaultL2ForHostTab(tab, canEarnCoins);
-      const tf: HostEarningsTimeframe = isEarningsTimeframe(nested)
-        ? nested
-        : isEarningsTimeframe(fallback)
-          ? fallback
-          : 'daily';
-      setNestedKey(tf);
-      setTimeframe(tf);
+      setNestedKey(undefined);
       if (appSurface !== 'earnings') onAppSurfaceChange('earnings');
       return;
     }
@@ -122,12 +112,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
     if (appSurface !== 'earnings') onAppSurfaceChange('earnings');
   };
 
-  const activeNestedKey =
-    hostTab === 'earnings'
-      ? timeframe
-      : hostTab === 'call_logs'
-        ? callFilter
-        : nestedKey;
+  const activeNestedKey = hostTab === 'call_logs' ? callFilter : nestedKey;
 
   return (
     <HostShell
@@ -149,6 +134,13 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
           onStartCall={(id) => onStartCall?.(id)}
           onOpenProfile={(id) => onOpenProfile?.(id)}
         />
+      ) : hostTab === 'earnings' ? (
+        <EarningsPeriodDashboard scope="host" accent="emerald" title="Your host earnings" />
+      ) : hostTab === 'payout_cards' ? (
+        <PayoutCardsPanel
+          title="Your payout cards"
+          subtitle="Save PayPal, bank, or wallet details so admin and your agency can pay your period-end salary locally."
+        />
       ) : (
         <FemaleHostAnalyticsDashboard
           shellMode
@@ -156,6 +148,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
           timeframe={timeframe}
           onTimeframeChange={setTimeframe}
           onOpenCallLogs={() => handleNavigateTab('call_logs', callFilter || 'all')}
+          onOpenPayoutCards={() => handleNavigateTab('payout_cards')}
           onOpenChat={onOpenChat}
           onStartCall={onStartCall}
         />

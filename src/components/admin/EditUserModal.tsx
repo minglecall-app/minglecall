@@ -456,9 +456,9 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
                   >
                     <option value="male_user">Male User</option>
                     <option value="female_user">Female User</option>
-                    <option value="female_creator">Female Creator (Team Leader Host)</option>
+                    <option value="female_creator">Female Creator (Agency Host)</option>
                     <option value="other_user">Other User</option>
-                    <option value="team_leader">Team Leader</option>
+                    <option value="team_leader">Agency</option>
                     <option value="admin">Admin</option>
                   </select>
                 </div>

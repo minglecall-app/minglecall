@@ -564,7 +564,7 @@ export function AdminEmailPanel() {
           />
           <ToggleRow
             label="Email on account create"
-            description="Send welcome / notice emails when admins or team leaders create accounts."
+            description="Send welcome / notice emails when admins or agencies create accounts."
             enabled={policy.emailAccountCreateEnabled}
             onChange={(v) => updateToggle('emailAccountCreateEnabled', v)}
           />

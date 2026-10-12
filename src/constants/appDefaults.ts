@@ -45,7 +45,7 @@ export const DEFAULT_TEAM_LEADER_USER: UserProfile = {
   nationality: 'United States',
   countryCode: 'US',
   spokenLanguages: ['English', 'Spanish'],
-  tags: ['Team Leader', 'Talent Manager', 'VIP Agency'],
+  tags: ['Agency', 'Talent Manager', 'VIP Agency'],
   interests: ['Talent Growth', 'Creator Mentorship', 'Live Video Economy'],
   coinBalance: 5000,
   hourlyCoinRate: 12,

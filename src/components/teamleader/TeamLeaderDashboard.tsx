@@ -10,9 +10,12 @@ import { getFallbackAvatar } from '../../utils/avatars';
 import { AgencyHostLeaderboard } from './AgencyHostLeaderboard';
 import { AgencyMilestoneAlerts } from './AgencyMilestoneAlerts';
 import { TeamLeaderSettlementsPanel } from './TeamLeaderSettlementsPanel';
+import { PayoutCardsPanel } from '../payout/PayoutCardsPanel';
+import { PayoutRosterPanel } from '../payout/PayoutRosterPanel';
 import { TeamLeaderShell } from './TeamLeaderShell';
 import { TeamLeaderKpiBoard } from './TeamLeaderKpiBoard';
 import { TeamLeaderTabKey } from './teamLeaderNavConfig';
+import { EarningsPeriodDashboard } from '../finance/EarningsPeriodDashboard';
 import { buildTlKpiSeries } from '../../utils/teamLeaderKpiSeries';
 import { PasswordStrengthField } from '../auth/PasswordStrengthField';
 import { getPasswordPolicyError, isPasswordPolicyValid } from '../../../shared/passwordPolicy';
@@ -445,7 +448,7 @@ export const TeamLeaderDashboard: React.FC<TeamLeaderDashboardProps> = ({
       onCreateCreator={() => setIsAddCreatorOpen(true)}
       isSyncing={isSyncing}
       brandName={currentUser.agencyName || 'Your Agency'}
-      brandSubtitle={currentUser.name || 'Team Leader'}
+      brandSubtitle={currentUser.name || 'Agency'}
       badges={{
         creators: managedCreators.length,
         leaderboard: 'LIVE',
@@ -458,7 +461,7 @@ export const TeamLeaderDashboard: React.FC<TeamLeaderDashboardProps> = ({
           accentClass: 'text-pink-300',
         },
         {
-          label: 'TL earnings',
+          label: 'Agency earnings',
           value: isLoadingStats && !agencyStats ? '…' : `$${teamLeaderEarnedUSD.toFixed(2)}`,
           accentClass: 'text-amber-300',
         },
@@ -896,6 +899,32 @@ export const TeamLeaderDashboard: React.FC<TeamLeaderDashboardProps> = ({
           </div>
         )}
 
+        {activeTab === 'tl_earnings' && (
+          <div className="space-y-4">
+            <EarningsPeriodDashboard scope="tl" accent="indigo" title="Your TL earnings" />
+          </div>
+        )}
+
+        {activeTab === 'host_earnings' && (
+          <div className="space-y-4">
+            <EarningsPeriodDashboard
+              scope="host"
+              accent="emerald"
+              title="Managed host earnings"
+            />
+          </div>
+        )}
+
+        {activeTab === 'payout_cards' && (
+          <div className="space-y-6">
+            <PayoutCardsPanel
+              title="Your payout cards"
+              subtitle="Save PayPal, bank, or wallet details so platform admin can pay your TL salary locally."
+            />
+            <PayoutRosterPanel title="Managed hosts’ payout cards" />
+          </div>
+        )}
+
         {/* ======================= TAB 3: SETTLEMENTS (FINANCE API) ======================= */}
         {activeTab === 'payouts' && (
           <div className="space-y-6">
@@ -961,11 +990,11 @@ export const TeamLeaderDashboard: React.FC<TeamLeaderDashboardProps> = ({
                   <span className="font-semibold text-slate-100">{currentUser.agencyName || 'Your Agency'}</span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-slate-800">
-                  <span className="text-slate-400">Director / Team Leader:</span>
+                  <span className="text-slate-400">Director / Agency:</span>
                   <span className="font-semibold text-slate-100">{currentUser.name}</span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-slate-800">
-                  <span className="text-slate-400">Team Leader Email:</span>
+                  <span className="text-slate-400">Agency Email:</span>
                   <span className="font-mono text-slate-200">{currentUser.email}</span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-slate-800">
@@ -986,7 +1015,7 @@ export const TeamLeaderDashboard: React.FC<TeamLeaderDashboardProps> = ({
             <div className="bg-[#12151F] border border-slate-800 rounded-2xl p-6 space-y-4">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <Award className="w-5 h-5 text-amber-400" />
-                Team Leader Rights & Privileges
+                Agency Rights & Privileges
               </h3>
 
               <div className="space-y-3 text-xs text-slate-300 leading-relaxed">
@@ -1158,7 +1187,7 @@ export const TeamLeaderDashboard: React.FC<TeamLeaderDashboardProps> = ({
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-400 leading-relaxed">
-                    The <strong className="text-white">first added language</strong> is the creator's <strong className="text-amber-300">Primary Language</strong> shown on Discovery Cards, Quick Matches, and used for Discovery Language Filtering. Any other languages added by the Team Leader are <strong className="text-slate-300">Secondary Languages</strong> shown inside her profile view.
+                    The <strong className="text-white">first added language</strong> is the creator's <strong className="text-amber-300">Primary Language</strong> shown on Discovery Cards, Quick Matches, and used for Discovery Language Filtering. Any other languages added by the Agency are <strong className="text-slate-300">Secondary Languages</strong> shown inside her profile view.
                   </p>
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     <div className="flex items-center space-x-1 px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-bold">
@@ -1192,7 +1221,7 @@ export const TeamLeaderDashboard: React.FC<TeamLeaderDashboardProps> = ({
                   <span className="font-mono font-bold text-amber-300">{systemFemaleEarnRate} 🪙/min</span>
                   {' '}≈ {systemSettings.femaleHostSharePercent ?? 30}% of burn). Global burn/shares are edited only in
                   Admin → Coin Burn &amp; Economy. Per-host absolute override (
-                  <code className="text-slate-400">coin_earn_override_rate</code>) is admin-only — Team Leaders cannot
+                  <code className="text-slate-400">coin_earn_override_rate</code>) is admin-only — Agencies cannot
                   change global economy.
                 </div>
               </div>

@@ -15,4 +15,5 @@ export { createFeedRouter } from './feed.routes';
 export { createFriendsRouter } from './friends.routes';
 export { createMessagesRouter } from './messages.routes';
 export { createFinanceRouter } from './finance.routes';
+export { createPayoutRouter } from './payout.routes';
 export { createUsersPublicRouter } from './users.routes';

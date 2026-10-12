@@ -33,7 +33,7 @@ export const AgenciesTab: React.FC<AgenciesTabProps> = ({
         <div className="flex items-center gap-2">
           <Building2 className="w-4 h-4 text-amber-400" />
           <h3 className="text-sm font-black text-white font-mono uppercase">
-            Agencies / Team Leaders ({agencies.length})
+            Agencies ({agencies.length})
           </h3>
         </div>
         {onOpenFinancialModule && (
@@ -53,7 +53,7 @@ export const AgenciesTab: React.FC<AgenciesTabProps> = ({
 
       {agencies.length === 0 ? (
         <div className="p-8 text-center text-xs font-mono text-slate-500 border border-dashed border-slate-800 rounded-2xl">
-          No Team Leaders registered yet.
+          No Agencies registered yet.
         </div>
       ) : (
         <div className="space-y-3">

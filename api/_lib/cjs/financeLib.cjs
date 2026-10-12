@@ -42,6 +42,7 @@ var init_r2Storage = __esm({
     CATEGORY_MAX_BYTES = {
       avatar: 5 * 1024 * 1024,
       gallery: 10 * 1024 * 1024,
+      gallery_video: 100 * 1024 * 1024,
       moment: 10 * 1024 * 1024,
       chat_media: 10 * 1024 * 1024,
       verification: 15 * 1024 * 1024,
@@ -50,10 +51,175 @@ var init_r2Storage = __esm({
   }
 });
 
+// shared/appNav.ts
+function navItem(audienceRole, bar, slot, actionTarget, order, overrides = {}) {
+  const dest = DEST_BY_TARGET.get(actionTarget);
+  if (!dest) throw new Error(`Missing nav destination ${actionTarget}`);
+  const id = bar === "brand" ? "brand_global" : `nav_${audienceRole}_${bar}_${slot}_${actionTarget}`;
+  return {
+    id,
+    audienceRole,
+    bar,
+    slot,
+    label: overrides.label ?? dest.label,
+    icon: overrides.icon ?? dest.icon,
+    actionType: dest.actionType,
+    actionTarget,
+    badge: overrides.badge ?? dest.badge,
+    meta: overrides.meta ?? null,
+    order,
+    active: overrides.active ?? true,
+    parentId: null
+  };
+}
+function subheaderFor(role) {
+  return SUBHEADER.map(
+    (entry, index) => navItem(role, "subheader", "default", entry.target, index + 1, {
+      label: entry.label,
+      icon: entry.icon,
+      meta: { group: entry.group }
+    })
+  );
+}
+function personaFor(role) {
+  const earningsLabel = role === "female_host" || role === "team_leader" ? "Earnings & Analytics" : role === "female_user" ? "Activity & Performance" : "Spending & Analytics";
+  const rows = [
+    navItem(role, "persona_menu", "default", "status_online", 1, { label: "Available" }),
+    navItem(role, "persona_menu", "default", "status_busy", 2, { label: "Busy" }),
+    navItem(role, "persona_menu", "default", "status_offline", 3, { label: "Offline" }),
+    navItem(role, "persona_menu", "default", "profile", 4, { label: "Profile" }),
+    navItem(role, "persona_menu", "default", "earnings", 5, { label: earningsLabel, icon: role === "male_user" || role === "admin" ? "TrendingUp" : "DollarSign" }),
+    navItem(role, "persona_menu", "default", "social_circle", 6, { label: "Friends & Social Circle", icon: "Users" }),
+    navItem(role, "persona_menu", "default", "install_pwa", 7, { label: "Install LiveCall PWA App", icon: "Download" }),
+    navItem(role, "persona_menu", "default", "logout", 8, { label: "Log Out", icon: "LogOut" })
+  ];
+  if (role === "male_user" || role === "admin") {
+    rows.splice(3, 0, navItem(role, "persona_menu", "default", "store", 0, { label: "Top Up", icon: "Coins", badge: "coin_balance" }));
+  }
+  return rows.map((row, index) => ({ ...row, order: index + 1 }));
+}
+function mobileFor(role) {
+  const targets = ["home", "discovery", "match", "chat", "profile"];
+  if (role === "female_user" || role === "female_host" || role === "admin" || role === "team_leader") {
+    targets.push("call_logs");
+  }
+  if (role === "team_leader") targets.push("team_leader");
+  if (role === "admin") targets.push("admin");
+  return targets.map((target, index) => {
+    const label = target === "home" ? "Home" : target === "discovery" ? "Discover" : target === "match" ? "Match" : target === "chat" ? "Chat" : target === "profile" ? "Profile" : target === "call_logs" ? "Logs" : target === "team_leader" ? "Agency" : "Admin";
+    const icon = target === "discovery" ? "Compass" : target === "match" ? "Flame" : target === "home" ? "Home" : void 0;
+    return navItem(role, "mobile_bottom", "default", target, index + 1, { label, icon });
+  });
+}
+function mainHeaderFor(role) {
+  const left = [
+    navItem(role, "main_header", "left", "home", 1, { label: "Home", icon: "Home" })
+  ];
+  if (role === "admin") {
+    left.push(navItem(role, "main_header", "left", "admin", 2, { label: "Admin", icon: "Settings" }));
+  }
+  const right = [
+    navItem(role, "main_header", "right", "daily_rewards", 1, { label: "Rewards", icon: "Gift", badge: "unclaimed_rewards" })
+  ];
+  if (role === "male_user" || role === "admin") {
+    right.push(navItem(role, "main_header", "right", "store", 2, { label: "Buy", icon: "Coins", badge: "coin_balance" }));
+  }
+  if (role === "team_leader") {
+    right.push(navItem(role, "main_header", "right", "team_leader", 2, { label: "Agency", icon: "Crown" }));
+  }
+  return [...left, ...right];
+}
+function buildDefaultAppNavItems() {
+  const brand = {
+    id: "brand_global",
+    audienceRole: "*",
+    bar: "brand",
+    slot: "default",
+    label: "Minglecall",
+    icon: "Sparkles",
+    actionType: "tab",
+    actionTarget: "home",
+    badge: "none",
+    meta: {
+      markText: "M",
+      wordmarkPrimary: "Mingle",
+      wordmarkAccent: "call",
+      imageUrl: "",
+      showMark: true,
+      showWordmark: true
+    },
+    order: 0,
+    active: true,
+    parentId: null
+  };
+  const guest = [
+    navItem("guest", "logged_out_header", "default", "auth_login", 1, { label: "Sign In", icon: "LogIn" }),
+    navItem("guest", "logged_out_header", "default", "auth_register", 2, { label: "Join free", icon: "UserPlus" })
+  ];
+  const signedIn = NAV_SIGNED_IN_ROLES.flatMap((role) => [
+    ...mainHeaderFor(role),
+    ...subheaderFor(role),
+    ...mobileFor(role),
+    ...personaFor(role)
+  ]);
+  return [brand, ...guest, ...signedIn];
+}
+var NAV_SIGNED_IN_ROLES, NAV_DESTINATIONS, DEST_BY_TARGET, SUBHEADER, INITIAL_APP_NAV_ITEMS;
+var init_appNav = __esm({
+  "shared/appNav.ts"() {
+    NAV_SIGNED_IN_ROLES = [
+      "admin",
+      "team_leader",
+      "male_user",
+      "female_user",
+      "female_host"
+    ];
+    NAV_DESTINATIONS = [
+      { id: "home", label: "Home", icon: "Home", actionType: "tab", actionTarget: "home", badge: "none", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu", "brand"] },
+      { id: "discovery", label: "Discover", icon: "LayoutGrid", actionType: "tab", actionTarget: "discovery", badge: "none", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "swipe", label: "Swipe", icon: "Layers", actionType: "tab", actionTarget: "swipe", badge: "none", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "moments", label: "Moments", icon: "Image", actionType: "tab", actionTarget: "moments", badge: "none", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "profile", label: "Profile", icon: "User", actionType: "tab", actionTarget: "profile", badge: "none", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "call_logs", label: "Calls", icon: "PhoneCall", actionType: "tab", actionTarget: "call_logs", badge: "missed_calls", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "earnings", label: "Earnings", icon: "DollarSign", actionType: "tab", actionTarget: "earnings", badge: "none", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "team_leader", label: "Agency", icon: "Crown", actionType: "tab", actionTarget: "team_leader", badge: "none", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "admin", label: "Admin", icon: "Settings", actionType: "tab", actionTarget: "admin", badge: "none", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "match", label: "Match", icon: "Zap", actionType: "overlay", actionTarget: "match", badge: "none", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "chat", label: "Chat", icon: "MessageCircle", actionType: "overlay", actionTarget: "chat", badge: "unread_messages", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "social_circle", label: "Circle", icon: "Users", actionType: "overlay", actionTarget: "social_circle", badge: "none", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "friend_requests", label: "Friends", icon: "UserPlus", actionType: "overlay", actionTarget: "friend_requests", badge: "friend_requests", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "daily_rewards", label: "Rewards", icon: "Gift", actionType: "modal", actionTarget: "daily_rewards", badge: "unclaimed_rewards", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "store", label: "Coins", icon: "Coins", actionType: "modal", actionTarget: "store", badge: "coin_balance", bars: ["main_header", "subheader", "mobile_bottom", "persona_menu"] },
+      { id: "auth_login", label: "Sign In", icon: "LogIn", actionType: "auth", actionTarget: "auth_login", badge: "none", bars: ["logged_out_header", "main_header"] },
+      { id: "auth_register", label: "Join free", icon: "UserPlus", actionType: "auth", actionTarget: "auth_register", badge: "none", bars: ["logged_out_header", "main_header"] },
+      { id: "logout", label: "Log Out", icon: "LogOut", actionType: "system", actionTarget: "logout", badge: "none", bars: ["persona_menu", "mobile_bottom", "main_header"] },
+      { id: "status_online", label: "Available", icon: "Circle", actionType: "system", actionTarget: "status_online", badge: "none", bars: ["persona_menu"] },
+      { id: "status_busy", label: "Busy", icon: "Circle", actionType: "system", actionTarget: "status_busy", badge: "none", bars: ["persona_menu"] },
+      { id: "status_offline", label: "Offline", icon: "Circle", actionType: "system", actionTarget: "status_offline", badge: "none", bars: ["persona_menu"] },
+      { id: "install_pwa", label: "Install app", icon: "Download", actionType: "system", actionTarget: "install_pwa", badge: "none", bars: ["persona_menu", "main_header"] },
+      { id: "exit", label: "Exit", icon: "LogOut", actionType: "system", actionTarget: "exit", badge: "none", bars: ["mobile_bottom"] },
+      { id: "none", label: "More", icon: "Menu", actionType: "system", actionTarget: "none", badge: "none", bars: ["main_header", "subheader", "mobile_bottom"] }
+    ];
+    DEST_BY_TARGET = new Map(NAV_DESTINATIONS.map((d) => [d.actionTarget, d]));
+    SUBHEADER = [
+      { target: "discovery", label: "Discover", icon: "LayoutGrid", group: "primary" },
+      { target: "swipe", label: "Swipe", icon: "Layers", group: "primary" },
+      { target: "moments", label: "Moments", icon: "Image", group: "primary" },
+      { target: "match", label: "Match", icon: "Zap", group: "primary" },
+      { target: "chat", label: "Chat", icon: "MessageCircle", group: "primary" },
+      { target: "call_logs", label: "Calls", icon: "PhoneCall", group: "secondary" },
+      { target: "friend_requests", label: "Friends", icon: "UserPlus", group: "secondary" },
+      { target: "social_circle", label: "Circle", icon: "Users", group: "secondary" }
+    ];
+    INITIAL_APP_NAV_ITEMS = buildDefaultAppNavItems();
+  }
+});
+
 // src/constants/appDefaults.ts
 var DEFAULT_ADMIN_USER, DEFAULT_TEAM_LEADER_USER, INITIAL_POLICY_DOCUMENTS;
 var init_appDefaults = __esm({
   "src/constants/appDefaults.ts"() {
+    init_appNav();
     DEFAULT_ADMIN_USER = {
       id: "00000000-0000-0000-0000-000000000001",
       name: "System Admin",
@@ -94,7 +260,7 @@ var init_appDefaults = __esm({
       nationality: "United States",
       countryCode: "US",
       spokenLanguages: ["English", "Spanish"],
-      tags: ["Team Leader", "Talent Manager", "VIP Agency"],
+      tags: ["Agency", "Talent Manager", "VIP Agency"],
       interests: ["Talent Growth", "Creator Mentorship", "Live Video Economy"],
       coinBalance: 5e3,
       hourlyCoinRate: 12,
@@ -276,7 +442,9 @@ function getSupabaseAdmin() {
         auth: {
           persistSession: false,
           autoRefreshToken: false
-        }
+        },
+        db: { schema: "public" },
+        global: { headers: { "X-Client-Info": "minglecall-express-admin" } }
       });
       console.log("[Supabase Admin] Initialized server-side Supabase client connected to:", supabaseUrl);
     } catch (err) {
@@ -308,11 +476,17 @@ __export(financeBundleEntry_exports, {
   DEFAULT_FEMALE_PAYOUT_RATIO_USD: () => DEFAULT_FEMALE_PAYOUT_RATIO_USD,
   DEFAULT_TARGET_THRESHOLDS: () => DEFAULT_TARGET_THRESHOLDS,
   EMPTY_HOST_EARNINGS_BREAKDOWN: () => EMPTY_HOST_EARNINGS_BREAKDOWN,
+  HOST_SALARY_FINANCIAL_ENTRY_TYPES: () => HOST_SALARY_FINANCIAL_ENTRY_TYPES,
+  HOST_SALARY_LINE_COMPONENTS: () => HOST_SALARY_LINE_COMPONENTS,
+  HOST_SALARY_WALLET_TYPES: () => HOST_SALARY_WALLET_TYPES,
+  NON_SALARY_REWARD_WALLET_TYPES: () => NON_SALARY_REWARD_WALLET_TYPES,
   PAYABLE_MODEL_NOTES: () => PAYABLE_MODEL_NOTES,
   PAYABLE_SOURCE_OF_TRUTH: () => PAYABLE_SOURCE_OF_TRUTH,
   PAYOUT_PERIOD_END_ONLY: () => PAYOUT_PERIOD_END_ONLY,
   PayoutPolicyError: () => PayoutPolicyError,
   SETTLEMENT_STATUS_TRANSITIONS: () => SETTLEMENT_STATUS_TRANSITIONS,
+  acknowledgePayeeSalary: () => acknowledgePayeeSalary,
+  agencyMarkHostPaid: () => agencyMarkHostPaid,
   aggregateHostCallBurnForTrueUp: () => aggregateHostCallBurnForTrueUp,
   aggregateWalletLedgerEarnings: () => aggregateWalletLedgerEarnings,
   appendFinancialLedgerEntries: () => appendFinancialLedgerEntries,
@@ -323,9 +497,15 @@ __export(financeBundleEntry_exports, {
   applyCreatorEarnCoins: () => applyCreatorEarnCoins,
   assertManualPayoutAllowed: () => assertManualPayoutAllowed,
   assertManualPayoutAllowedSync: () => assertManualPayoutAllowedSync,
+  buildEarningsLedger: () => buildEarningsLedger,
+  buildEarningsOverview: () => buildEarningsOverview,
+  buildSalaryEstimatePreview: () => buildSalaryEstimatePreview,
+  buildSalaryPeriodPdf: () => buildSalaryPeriodPdf,
+  buildSalaryPeriodXlsx: () => buildSalaryPeriodXlsx,
   buildSettlementBatches: () => buildSettlementBatches,
   canTransitionSettlementStatus: () => canTransitionSettlementStatus,
   cancelSettlementBatch: () => cancelSettlementBatch,
+  categoryFromSettlementComponent: () => categoryFromSettlementComponent,
   checkManualPayoutAllowed: () => checkManualPayoutAllowed,
   closeDuePeriods: () => closeDuePeriods,
   closePeriod: () => closePeriod,
@@ -355,19 +535,33 @@ __export(financeBundleEntry_exports, {
   getNextCloseAt: () => getNextCloseAt2,
   getTargetThresholds: () => getTargetThresholds,
   getUserPeriodAccrual: () => getUserPeriodAccrual,
+  groupLiveLedgerRowsByCall: () => groupLiveLedgerRowsByCall,
+  groupWalletLedgerByCall: () => groupWalletLedgerByCall,
   invalidateFinanceConfigCache: () => invalidateFinanceConfigCache,
+  isGiftWalletMetadata: () => isGiftWalletMetadata,
+  isHostSalaryFinancialEntryType: () => isHostSalaryFinancialEntryType,
+  isNonSalaryRewardType: () => isNonSalaryRewardType,
+  labelEarningsMoneyCategory: () => labelEarningsMoneyCategory,
   labelSettlementComponent: () => labelSettlementComponent,
+  listSalaryPeriods: () => listSalaryPeriods,
   loadFinanceSystemConfig: () => loadFinanceSystemConfig,
   loadGiftSharePercents: () => loadGiftSharePercents,
+  loadSalaryPayoutDetailsByUserIds: () => loadSalaryPayoutDetailsByUserIds,
+  loadSalaryPeriodDetail: () => loadSalaryPeriodDetail,
   markBatchAdminPaid: () => markBatchAdminPaid,
   markBatchTlConfirmed: () => markBatchTlConfirmed,
+  markPeriodAdminPaid: () => markPeriodAdminPaid,
   normalizeCycleType: () => normalizeCycleType,
   normalizeFxRatio: () => normalizeFxRatio,
+  normalizePayeeSalaryStatus: () => normalizePayeeSalaryStatus,
   planHostShareTrueUps: () => planHostShareTrueUps,
   postHostShareTrueUpWallet: () => postHostShareTrueUpWallet,
+  reconcileBatch: () => reconcileBatch,
   recordBatchCreatedEvent: () => recordBatchCreatedEvent,
   refreshFinanceConfigInBackground: () => refreshFinanceConfigInBackground,
   resolveCatalogGiftById: () => resolveCatalogGiftById,
+  resolveEarningsScopeAccess: () => resolveEarningsScopeAccess,
+  resolveSessionCallId: () => resolveSessionCallId,
   resolveTargetThresholds: () => resolveTargetThresholds,
   summarizeHostSettlementLines: () => summarizeHostSettlementLines,
   targetBonusUsdForTier: () => targetBonusUsdForTier,
@@ -1596,6 +1790,12 @@ var SETTLEMENT_STATUS_TRANSITIONS = {
 function canTransitionSettlementStatus(from, to) {
   return (SETTLEMENT_STATUS_TRANSITIONS[from] || []).includes(to);
 }
+function normalizePayeeSalaryStatus(raw) {
+  const s = String(raw || "pending").trim();
+  if (s === "acknowledged" || s === "paid") return "acknowledged";
+  if (s === "admin_paid") return "admin_paid";
+  return "pending";
+}
 async function appendEvent(opts) {
   const client = getSupabaseAdmin();
   if (!client) return { success: false, error: "Supabase admin client unavailable" };
@@ -1610,12 +1810,214 @@ async function appendEvent(opts) {
   if (error) return { success: false, error: error.message };
   return { success: true };
 }
-async function markHostLinesPaid(batchId) {
+async function setPayeeLinesAdminPaidForRemit(batchId, batchKind) {
   const client = getSupabaseAdmin();
   if (!client) return { success: false, error: "Supabase admin client unavailable" };
-  const { error } = await client.from("settlement_line_items").update({ host_salary_status: "paid" }).eq("batch_id", batchId).eq("payee_role", "host");
+  let q = client.from("settlement_line_items").update({ host_salary_status: "admin_paid" }).eq("batch_id", batchId).in("host_salary_status", ["pending", "paid"]);
+  const remitRole = adminRemitLinePayeeRoleFilter(batchKind);
+  if (remitRole) {
+    q = q.eq("payee_role", remitRole);
+  }
+  const { error } = await q;
   if (error) return { success: false, error: error.message };
   return { success: true };
+}
+function normalizeReconcileStatus(raw) {
+  return String(raw || "unreconciled") === "reconciled" ? "reconciled" : "unreconciled";
+}
+function adminRemitLinePayeeRoleFilter(batchKind) {
+  return batchKind === "team_leader_bundle" ? "team_leader" : null;
+}
+function reconcileGateOk(reconcileStatus) {
+  return normalizeReconcileStatus(reconcileStatus) === "reconciled";
+}
+function evaluateAgencyMarkHostPaidGate(opts) {
+  if (opts.batchKind !== "team_leader_bundle") {
+    return {
+      ok: false,
+      code: "INVALID_TRANSITION",
+      error: "Only Agency bundles support Agency host mark-paid"
+    };
+  }
+  if (String(opts.teamLeaderId || "") !== opts.actorUserId) {
+    return { ok: false, code: "FORBIDDEN", error: "Not your Agency settlement batch" };
+  }
+  if (!reconcileGateOk(opts.reconcileStatus)) {
+    return {
+      ok: false,
+      code: "RECONCILE_REQUIRED",
+      error: "Reconcile this batch before marking host salaries paid"
+    };
+  }
+  if (opts.batchStatus !== "admin_paid" && opts.batchStatus !== "tl_confirmed") {
+    return {
+      ok: false,
+      code: "INVALID_TRANSITION",
+      error: "Admin must remit the Agency bundle before marking hosts paid"
+    };
+  }
+  if (opts.hostUserId === opts.actorUserId) {
+    return {
+      ok: false,
+      code: "INVALID_TRANSITION",
+      error: "Use acknowledge for your Agency commission, not host mark-paid"
+    };
+  }
+  return { ok: true };
+}
+function allPayeeLinesAcknowledged(lineStatuses) {
+  if (!lineStatuses.length) return false;
+  return lineStatuses.every((s) => normalizePayeeSalaryStatus(s) === "acknowledged");
+}
+async function reconcileBatch(opts) {
+  if (!isSupabaseAdminConfigured()) {
+    return { success: false, code: "NOT_CONFIGURED", error: "Supabase admin not configured" };
+  }
+  const client = getSupabaseAdmin();
+  if (!client) {
+    return { success: false, code: "NOT_CONFIGURED", error: "Supabase admin client unavailable" };
+  }
+  const batchId = String(opts.batchId || "").trim();
+  const actorUserId = String(opts.actorUserId || "").trim();
+  if (!batchId) return { success: false, code: "NOT_FOUND", error: "Batch id required" };
+  if (!actorUserId) return { success: false, code: "FORBIDDEN", error: "Unauthorized" };
+  const { data: batch, error } = await client.from("settlement_batches").select(
+    "id, status, batch_kind, team_leader_id, period_id, reconcile_status, reconciled_at, reconciled_by, reconciled_by_role"
+  ).eq("id", batchId).maybeSingle();
+  if (error) return { success: false, code: "DB_ERROR", error: error.message };
+  if (!batch) return { success: false, code: "NOT_FOUND", error: "Batch not found" };
+  if (batch.status === "cancelled") {
+    return { success: false, code: "INVALID_TRANSITION", error: "Cancelled batch cannot be reconciled" };
+  }
+  if (opts.actorRole === "team_leader") {
+    if (batch.batch_kind !== "team_leader_bundle") {
+      return {
+        success: false,
+        code: "FORBIDDEN",
+        error: "Agency can only reconcile their own bundle batches"
+      };
+    }
+    if (String(batch.team_leader_id || "") !== actorUserId) {
+      return { success: false, code: "FORBIDDEN", error: "Not your Agency settlement batch" };
+    }
+  } else if (opts.actorRole !== "admin") {
+    return { success: false, code: "FORBIDDEN", error: "Unauthorized" };
+  }
+  if (normalizeReconcileStatus(batch.reconcile_status) === "reconciled") {
+    return { success: true, alreadyReconciled: true };
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const { error: updateError } = await client.from("settlement_batches").update({
+    reconcile_status: "reconciled",
+    reconciled_at: now,
+    reconciled_by: actorUserId,
+    reconciled_by_role: opts.actorRole,
+    updated_at: now
+  }).eq("id", batchId).eq("reconcile_status", "unreconciled");
+  if (updateError) return { success: false, code: "DB_ERROR", error: updateError.message };
+  const ev = await appendEvent({
+    batchId,
+    periodId: batch.period_id,
+    eventType: "reconciled",
+    actorUserId,
+    note: opts.note ?? null,
+    payload: { reconciledByRole: opts.actorRole }
+  });
+  if (!ev.success) {
+    await client.from("settlement_batches").update({
+      reconcile_status: "unreconciled",
+      reconciled_at: null,
+      reconciled_by: null,
+      reconciled_by_role: null,
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("id", batchId);
+    return { success: false, code: "DB_ERROR", error: ev.error };
+  }
+  return { success: true };
+}
+async function agencyMarkHostPaid(opts) {
+  if (!isSupabaseAdminConfigured()) {
+    return { success: false, code: "NOT_CONFIGURED", error: "Supabase admin not configured" };
+  }
+  const client = getSupabaseAdmin();
+  if (!client) {
+    return { success: false, code: "NOT_CONFIGURED", error: "Supabase admin client unavailable" };
+  }
+  const batchId = String(opts.batchId || "").trim();
+  const hostUserId = String(opts.hostUserId || "").trim();
+  const actorUserId = String(opts.actorUserId || "").trim();
+  if (!batchId || !hostUserId) {
+    return { success: false, code: "NOT_FOUND", error: "Batch and host id required" };
+  }
+  if (!actorUserId) return { success: false, code: "FORBIDDEN", error: "Unauthorized" };
+  const { data: batch, error } = await client.from("settlement_batches").select("id, status, batch_kind, team_leader_id, period_id, reconcile_status").eq("id", batchId).maybeSingle();
+  if (error) return { success: false, code: "DB_ERROR", error: error.message };
+  if (!batch) return { success: false, code: "NOT_FOUND", error: "Batch not found" };
+  const gate = evaluateAgencyMarkHostPaidGate({
+    batchKind: String(batch.batch_kind || ""),
+    teamLeaderId: batch.team_leader_id,
+    actorUserId,
+    reconcileStatus: batch.reconcile_status,
+    batchStatus: String(batch.status || ""),
+    hostUserId
+  });
+  if (!gate.ok) {
+    return { success: false, code: gate.code, error: gate.error };
+  }
+  const { data: hostLines, error: linesErr } = await client.from("settlement_line_items").select("id, host_salary_status").eq("batch_id", batchId).eq("payee_user_id", hostUserId).eq("payee_role", "host");
+  if (linesErr) return { success: false, code: "DB_ERROR", error: linesErr.message };
+  if (!hostLines?.length) {
+    return { success: false, code: "NOT_FOUND", error: "No host salary lines for this user on the batch" };
+  }
+  const already = hostLines.every(
+    (l) => normalizePayeeSalaryStatus(l.host_salary_status) !== "pending"
+  );
+  if (already) return { success: true, alreadyPaid: true };
+  const { error: updateErr } = await client.from("settlement_line_items").update({ host_salary_status: "admin_paid" }).eq("batch_id", batchId).eq("payee_user_id", hostUserId).eq("payee_role", "host").in("host_salary_status", ["pending", "paid"]);
+  if (updateErr) return { success: false, code: "DB_ERROR", error: updateErr.message };
+  const ev = await appendEvent({
+    batchId,
+    periodId: batch.period_id,
+    eventType: "agency_marked_host_paid",
+    actorUserId,
+    note: opts.note ?? null,
+    payload: { hostUserId }
+  });
+  if (!ev.success) return { success: false, code: "DB_ERROR", error: ev.error };
+  return { success: true };
+}
+async function tryPromoteBatchWhenFullyAcknowledged(batchId, actorUserId, periodId) {
+  const client = getSupabaseAdmin();
+  if (!client) return { success: false, error: "Supabase admin client unavailable" };
+  const { data: lines, error } = await client.from("settlement_line_items").select("id, host_salary_status").eq("batch_id", batchId);
+  if (error) return { success: false, error: error.message };
+  const list = lines || [];
+  if (!list.length) return { success: true, promoted: false };
+  const allAcked = allPayeeLinesAcknowledged(list.map((l) => l.host_salary_status));
+  if (!allAcked) return { success: true, promoted: false };
+  const { data: batch, error: batchErr } = await client.from("settlement_batches").select("id, status").eq("id", batchId).maybeSingle();
+  if (batchErr) return { success: false, error: batchErr.message };
+  if (!batch) return { success: false, error: "Batch not found" };
+  if (batch.status === "tl_confirmed") return { success: true, promoted: false };
+  if (batch.status !== "admin_paid") return { success: true, promoted: false };
+  const { error: updateError } = await client.from("settlement_batches").update({
+    status: "tl_confirmed",
+    updated_at: (/* @__PURE__ */ new Date()).toISOString()
+  }).eq("id", batchId).eq("status", "admin_paid");
+  if (updateError) return { success: false, error: updateError.message };
+  const ev = await appendEvent({
+    batchId,
+    periodId,
+    eventType: "tl_confirmed",
+    actorUserId,
+    note: "All payees acknowledged",
+    payload: { reason: "all_payees_acknowledged" }
+  });
+  if (!ev.success) {
+    await client.from("settlement_batches").update({ status: "admin_paid", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", batchId).eq("status", "tl_confirmed");
+    return { success: false, error: ev.error };
+  }
+  return { success: true, promoted: true };
 }
 async function markBatchAdminPaid(opts) {
   if (!isSupabaseAdminConfigured()) {
@@ -1625,15 +2027,25 @@ async function markBatchAdminPaid(opts) {
   if (!client) {
     return { success: false, code: "NOT_CONFIGURED", error: "Supabase admin client unavailable" };
   }
-  const { data: batch, error } = await client.from("settlement_batches").select("id, status, batch_kind, period_id").eq("id", opts.batchId).maybeSingle();
+  const { data: batch, error } = await client.from("settlement_batches").select("id, status, batch_kind, period_id, reconcile_status").eq("id", opts.batchId).maybeSingle();
   if (error) return { success: false, code: "DB_ERROR", error: error.message };
   if (!batch) return { success: false, code: "NOT_FOUND", error: "Batch not found" };
   const from = batch.status;
+  if (from === "admin_paid" || from === "tl_confirmed") {
+    return { success: true, alreadyPaid: true };
+  }
   if (!canTransitionSettlementStatus(from, "admin_paid")) {
     return {
       success: false,
       code: "INVALID_TRANSITION",
       error: `Cannot transition ${from} \u2192 admin_paid`
+    };
+  }
+  if (!reconcileGateOk(batch.reconcile_status)) {
+    return {
+      success: false,
+      code: "RECONCILE_REQUIRED",
+      error: "Reconcile this batch before Admin remittance / Salary Paid"
     };
   }
   const { error: updateError } = await client.from("settlement_batches").update({
@@ -1648,7 +2060,11 @@ async function markBatchAdminPaid(opts) {
     eventType: "admin_marked_paid",
     actorUserId: opts.actorUserId,
     note: opts.note ?? null,
-    payload: { paymentReference: opts.paymentReference ?? null }
+    payload: {
+      paymentReference: opts.paymentReference ?? null,
+      batchKind: batch.batch_kind,
+      remitScope: adminRemitLinePayeeRoleFilter(String(batch.batch_kind)) ? "tl_commission_only" : "all_payee_lines"
+    }
   });
   if (!ev.success) {
     await client.from("settlement_batches").update({
@@ -1658,14 +2074,11 @@ async function markBatchAdminPaid(opts) {
     }).eq("id", opts.batchId).eq("status", "admin_paid");
     return { success: false, code: "DB_ERROR", error: ev.error };
   }
-  const payHostsNow = opts.markHostsPaidNow === true || batch.batch_kind === "direct_host";
-  if (payHostsNow) {
-    const paid = await markHostLinesPaid(opts.batchId);
-    if (!paid.success) return { success: false, code: "DB_ERROR", error: paid.error };
-  }
+  const lines = await setPayeeLinesAdminPaidForRemit(opts.batchId, String(batch.batch_kind));
+  if (!lines.success) return { success: false, code: "DB_ERROR", error: lines.error };
   return { success: true };
 }
-async function markBatchTlConfirmed(opts) {
+async function markPeriodAdminPaid(opts) {
   if (!isSupabaseAdminConfigured()) {
     return { success: false, code: "NOT_CONFIGURED", error: "Supabase admin not configured" };
   }
@@ -1673,51 +2086,141 @@ async function markBatchTlConfirmed(opts) {
   if (!client) {
     return { success: false, code: "NOT_CONFIGURED", error: "Supabase admin client unavailable" };
   }
-  const { data: batch, error } = await client.from("settlement_batches").select("id, status, batch_kind, team_leader_id, payee_user_id, period_id").eq("id", opts.batchId).maybeSingle();
+  const periodId = String(opts.periodId || "").trim();
+  if (!periodId) return { success: false, code: "NOT_FOUND", error: "Period id required" };
+  const { data: period, error: periodErr } = await client.from("settlement_periods").select("id, status").eq("id", periodId).maybeSingle();
+  if (periodErr) return { success: false, code: "DB_ERROR", error: periodErr.message };
+  if (!period) return { success: false, code: "NOT_FOUND", error: "Period not found" };
+  const { data: batches, error: batchErr } = await client.from("settlement_batches").select("id, status, reconcile_status").eq("period_id", periodId).neq("status", "cancelled");
+  if (batchErr) return { success: false, code: "DB_ERROR", error: batchErr.message };
+  const list = batches || [];
+  if (!list.length) {
+    return { success: false, code: "NOT_FOUND", error: "No settlement batches for this period" };
+  }
+  let updated = 0;
+  let skippedUnreconciled = 0;
+  for (const b of list) {
+    if (b.status === "admin_paid" || b.status === "tl_confirmed") continue;
+    if (normalizeReconcileStatus(b.reconcile_status) !== "reconciled") {
+      skippedUnreconciled += 1;
+      continue;
+    }
+    const result = await markBatchAdminPaid({
+      batchId: b.id,
+      actorUserId: opts.actorUserId,
+      note: opts.note,
+      paymentReference: opts.paymentReference
+    });
+    if (!result.success) {
+      return { ...result, batchesUpdated: updated, skippedUnreconciled };
+    }
+    if (!result.alreadyPaid) updated += 1;
+  }
+  if (updated === 0 && skippedUnreconciled > 0) {
+    return {
+      success: false,
+      code: "RECONCILE_REQUIRED",
+      error: `${skippedUnreconciled} batch(es) still need reconcile before remittance`,
+      skippedUnreconciled,
+      batchesUpdated: 0
+    };
+  }
+  return {
+    success: true,
+    batchesUpdated: updated,
+    alreadyPaid: updated === 0,
+    skippedUnreconciled
+  };
+}
+async function acknowledgePayeeSalary(opts) {
+  if (!isSupabaseAdminConfigured()) {
+    return { success: false, code: "NOT_CONFIGURED", error: "Supabase admin not configured" };
+  }
+  const client = getSupabaseAdmin();
+  if (!client) {
+    return { success: false, code: "NOT_CONFIGURED", error: "Supabase admin client unavailable" };
+  }
+  const batchId = String(opts.batchId || "").trim();
+  const actorUserId = String(opts.actorUserId || "").trim();
+  if (!batchId) return { success: false, code: "NOT_FOUND", error: "Batch id required" };
+  if (!actorUserId) return { success: false, code: "FORBIDDEN", error: "Unauthorized" };
+  const { data: batch, error } = await client.from("settlement_batches").select("id, status, batch_kind, team_leader_id, payee_user_id, period_id").eq("id", batchId).maybeSingle();
   if (error) return { success: false, code: "DB_ERROR", error: error.message };
   if (!batch) return { success: false, code: "NOT_FOUND", error: "Batch not found" };
-  if (batch.batch_kind !== "team_leader_bundle") {
+  if (batch.status !== "admin_paid" && batch.status !== "tl_confirmed") {
     return {
       success: false,
       code: "INVALID_TRANSITION",
-      error: "tl_confirmed only applies to team_leader_bundle batches"
+      error: "Salary can only be acknowledged after Admin remittance (and Agency host pay for managed hosts)"
     };
   }
-  const allowedActor = opts.actorUserId === batch.team_leader_id || opts.actorUserId === batch.payee_user_id;
-  if (!allowedActor) {
+  const { data: myLines, error: linesErr } = await client.from("settlement_line_items").select("id, payee_role, host_salary_status").eq("batch_id", batchId).eq("payee_user_id", actorUserId);
+  if (linesErr) return { success: false, code: "DB_ERROR", error: linesErr.message };
+  if (!myLines?.length) {
+    return {
+      success: false,
+      code: "FORBIDDEN",
+      error: "You are not a payee on this settlement batch"
+    };
+  }
+  const already = myLines.every(
+    (l) => normalizePayeeSalaryStatus(l.host_salary_status) === "acknowledged"
+  );
+  if (already) return { success: true, alreadyPaid: true };
+  const roles = new Set(myLines.map((l) => String(l.payee_role)));
+  const isTl = roles.has("team_leader");
+  const isHost = roles.has("host");
+  const pendingOnly = myLines.every(
+    (l) => normalizePayeeSalaryStatus(l.host_salary_status) === "pending"
+  );
+  if (pendingOnly) {
     return {
       success: false,
       code: "INVALID_TRANSITION",
-      error: "Only the batch team leader may confirm receipt"
+      error: "Salary is not marked paid yet \u2014 wait for remittance / Agency payout"
     };
   }
-  const from = batch.status;
-  if (!canTransitionSettlementStatus(from, "tl_confirmed")) {
-    return {
-      success: false,
-      code: "INVALID_TRANSITION",
-      error: `Cannot transition ${from} \u2192 tl_confirmed`
-    };
-  }
-  const { error: updateError } = await client.from("settlement_batches").update({
-    status: "tl_confirmed",
-    updated_at: (/* @__PURE__ */ new Date()).toISOString()
-  }).eq("id", opts.batchId).eq("status", from);
-  if (updateError) return { success: false, code: "DB_ERROR", error: updateError.message };
+  const { error: updateErr } = await client.from("settlement_line_items").update({ host_salary_status: "acknowledged" }).eq("batch_id", batchId).eq("payee_user_id", actorUserId).eq("host_salary_status", "admin_paid");
+  if (updateErr) return { success: false, code: "DB_ERROR", error: updateErr.message };
+  const eventType = isTl && !isHost ? "tl_acknowledged" : "host_acknowledged";
+  const primaryEvent = isTl ? "tl_acknowledged" : "host_acknowledged";
   const ev = await appendEvent({
-    batchId: opts.batchId,
+    batchId,
     periodId: batch.period_id,
-    eventType: "tl_confirmed",
-    actorUserId: opts.actorUserId,
-    note: opts.note ?? null
+    eventType: primaryEvent,
+    actorUserId,
+    note: opts.note ?? null,
+    payload: {
+      payeeRoles: Array.from(roles),
+      alsoHostAck: isTl && isHost ? true : void 0,
+      eventAlias: eventType
+    }
   });
-  if (!ev.success) {
-    await client.from("settlement_batches").update({ status: from, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", opts.batchId).eq("status", "tl_confirmed");
-    return { success: false, code: "DB_ERROR", error: ev.error };
+  if (!ev.success) return { success: false, code: "DB_ERROR", error: ev.error };
+  if (isTl && isHost) {
+    await appendEvent({
+      batchId,
+      periodId: batch.period_id,
+      eventType: "host_acknowledged",
+      actorUserId,
+      note: opts.note ?? null,
+      payload: { reason: "tl_also_host_payee" }
+    });
   }
-  const paid = await markHostLinesPaid(opts.batchId);
-  if (!paid.success) return { success: false, code: "DB_ERROR", error: paid.error };
+  const promoted = await tryPromoteBatchWhenFullyAcknowledged(
+    batchId,
+    actorUserId,
+    batch.period_id
+  );
+  if (!promoted.success) return { success: false, code: "DB_ERROR", error: promoted.error };
   return { success: true };
+}
+async function markBatchTlConfirmed(opts) {
+  return acknowledgePayeeSalary({
+    batchId: opts.batchId,
+    actorUserId: opts.actorUserId,
+    note: opts.note
+  });
 }
 async function cancelSettlementBatch(opts) {
   if (!isSupabaseAdminConfigured()) {
@@ -2086,8 +2589,6 @@ async function completeCoinPurchase(input) {
   if (!profile) return { success: false, error: "User not found", code: "NOT_FOUND" };
   const peg = await loadLiveCoinUsdPeg(client);
   const pegFields = purchasePegFields(amountCoins, amountUsd, peg);
-  const previousBalance = Number(profile.coin_balance) || 0;
-  const newBalance = previousBalance + amountCoins;
   const nowIso = (/* @__PURE__ */ new Date()).toISOString();
   const ledgerMeta = buildLedgerMetadata(
     {
@@ -2111,7 +2612,7 @@ async function completeCoinPurchase(input) {
     const { data: purchaseRow, error: purchaseErr } = await client.from("coin_purchases").insert({
       user_id: userId,
       channel,
-      status: "completed",
+      status: "pending",
       amount_coins: amountCoins,
       amount_usd: amountUsd != null ? Number(amountUsd) : null,
       ...pegColumnPayload,
@@ -2119,8 +2620,7 @@ async function completeCoinPurchase(input) {
       payment_provider: provider,
       external_ref: externalRef,
       actor_admin_id: input.actorAdminId ?? null,
-      reason,
-      completed_at: nowIso
+      reason
     }).select("id").single();
     if (purchaseErr) {
       if (purchaseErr.code === "23505") {
@@ -2130,37 +2630,36 @@ async function completeCoinPurchase(input) {
     }
     purchaseId = String(purchaseRow.id);
   }
-  const { error: balErr } = await client.from("profiles").update({ coin_balance: newBalance }).eq("id", userId);
-  if (balErr) {
+  const idempotencyKey = (externalRef && provider ? `purchase:${provider}:${externalRef}` : null) || `purchase:${purchaseId}`;
+  const { data: rpcRaw, error: rpcErr } = await client.rpc("complete_coin_purchase_atomic", {
+    p_user_id: userId,
+    p_amount_coins: amountCoins,
+    p_idempotency_key: idempotencyKey,
+    p_purchase_id: purchaseId,
+    p_metadata: ledgerMeta
+  });
+  if (rpcErr) {
     if (!pendingMode && purchaseId) {
-      await client.from("coin_purchases").delete().eq("id", purchaseId);
+      await client.from("coin_purchases").update({ status: "failed" }).eq("id", purchaseId);
     }
-    return { success: false, error: balErr.message, code: "BALANCE_UPDATE_FAILED" };
+    return { success: false, error: rpcErr.message, code: "PURCHASE_RPC_FAILED" };
   }
-  const { data: ledgerRow, error: ledgerErr } = await client.from("wallet_ledger").insert({
-    user_id: userId,
-    call_id: purchaseId,
-    transaction_type: "PURCHASE",
-    amount: amountCoins,
-    balance_after: newBalance,
-    billing_minute: 0,
-    metadata: ledgerMeta
-  }).select("id").single();
-  if (ledgerErr) {
-    await client.from("profiles").update({ coin_balance: previousBalance }).eq("id", userId);
+  const rpcResult = typeof rpcRaw === "string" ? JSON.parse(rpcRaw) : rpcRaw;
+  if (!rpcResult?.success) {
     if (!pendingMode && purchaseId) {
-      await client.from("coin_purchases").delete().eq("id", purchaseId);
+      await client.from("coin_purchases").update({ status: "failed" }).eq("id", purchaseId);
     }
-    const msg = String(ledgerErr.message || "");
-    if (ledgerErr.code === "23505" || /duplicate|unique/i.test(msg)) {
-      return { success: false, error: "Purchase ledger already posted", code: "LEDGER_DUPLICATE" };
-    }
-    return { success: false, error: msg, code: "LEDGER_INSERT_FAILED" };
+    return {
+      success: false,
+      error: rpcResult?.error_message || "Purchase credit failed",
+      code: rpcResult?.error_code || "PURCHASE_FAILED"
+    };
   }
-  const walletLedgerId = String(ledgerRow.id);
-  const { error: finalizeErr } = await client.from("coin_purchases").update({
+  const walletLedgerId = rpcResult.wallet_ledger_id ? String(rpcResult.wallet_ledger_id) : void 0;
+  const newBalance = Number(rpcResult.coin_balance) || 0;
+  await client.from("coin_purchases").update({
     status: "completed",
-    wallet_ledger_id: walletLedgerId,
+    wallet_ledger_id: walletLedgerId || null,
     completed_at: nowIso,
     payment_provider: provider || void 0,
     external_ref: externalRef || void 0,
@@ -2168,14 +2667,12 @@ async function completeCoinPurchase(input) {
     amount_usd: amountUsd != null ? Number(amountUsd) : void 0,
     ...pegColumnPayload
   }).eq("id", purchaseId);
-  if (finalizeErr) {
-    console.warn("[completeCoinPurchase] finalize purchase row failed:", finalizeErr.message);
-  }
   return {
     success: true,
     purchaseId,
     walletLedgerId,
-    coinBalance: newBalance
+    coinBalance: newBalance,
+    duplicate: Boolean(rpcResult.duplicate)
   };
 }
 async function failCheckoutIntent(opts) {
@@ -3086,6 +3583,898 @@ async function closeDuePeriods(opts) {
   };
 }
 
+// server/finance/salaryPeriodView.ts
+init_supabaseAdmin();
+
+// server/finance/salaryPayoutAttach.ts
+init_supabaseAdmin();
+
+// shared/payout/types.ts
+function isPayoutMethodKey(v) {
+  return v === "paypal" || v === "bank_account" || v === "wallet";
+}
+function isPayoutFieldType(v) {
+  return v === "text" || v === "phone" || v === "email" || v === "number" || v === "select";
+}
+
+// shared/payout/phoneUi.ts
+function isPhoneMetaKey(key) {
+  return /_(dial|national|has_chat|chat_apps)$/.test(key);
+}
+function formatMaskedDetailsLine(masked) {
+  const v = masked || {};
+  const parts = [];
+  for (const [k, val] of Object.entries(v)) {
+    if (isPhoneMetaKey(k)) continue;
+    if (!String(val || "").trim()) continue;
+    parts.push(`${k}: ${val}`);
+  }
+  return parts.join(" \xB7 ") || "\u2014";
+}
+
+// shared/payout/validate.ts
+function cleanStr(v, max = 240) {
+  return String(v ?? "").trim().slice(0, max);
+}
+function normalizeFieldDef(raw) {
+  const id = cleanStr(raw?.id || raw?.key, 64);
+  const key = cleanStr(raw?.key, 64).toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  const label = cleanStr(raw?.label, 120);
+  const type = isPayoutFieldType(raw?.type) ? raw.type : "text";
+  if (!id || !key || !label) return null;
+  const options = Array.isArray(raw?.options) ? raw.options.map((o) => cleanStr(o, 80)).filter(Boolean).slice(0, 40) : void 0;
+  return {
+    id,
+    key,
+    label,
+    type,
+    required: Boolean(raw?.required),
+    placeholder: cleanStr(raw?.placeholder, 160) || void 0,
+    options: type === "select" ? options && options.length ? options : ["Other"] : void 0
+  };
+}
+function mapTemplateRow(row) {
+  const fieldsRaw = Array.isArray(row?.fields_json) ? row.fields_json : typeof row?.fields_json === "string" ? (() => {
+    try {
+      return JSON.parse(row.fields_json);
+    } catch {
+      return [];
+    }
+  })() : Array.isArray(row?.fields) ? row.fields : [];
+  const fields = fieldsRaw.map(normalizeFieldDef).filter(Boolean);
+  const methodKey = isPayoutMethodKey(row?.method_key || row?.methodKey) ? row.method_key || row.methodKey : "paypal";
+  return {
+    methodKey,
+    label: cleanStr(row?.label, 80) || methodKey,
+    icon: cleanStr(row?.icon, 40) || "Wallet",
+    description: cleanStr(row?.description, 400),
+    isEnabled: row?.is_enabled !== false && row?.isEnabled !== false,
+    countriesMode: row?.countries_mode === "selected" || row?.countriesMode === "selected" ? "selected" : "all",
+    countryCodes: Array.isArray(row?.country_codes) ? row.country_codes.map((c) => cleanStr(c, 8).toUpperCase()).filter(Boolean) : Array.isArray(row?.countryCodes) ? row.countryCodes.map((c) => cleanStr(c, 8).toUpperCase()).filter(Boolean) : [],
+    fields,
+    sortOrder: Number(row?.sort_order ?? row?.sortOrder ?? 0) || 0,
+    updatedAt: row?.updated_at || row?.updatedAt || void 0
+  };
+}
+function maskValue(key, value) {
+  const v = String(value || "");
+  if (!v) return "";
+  const k = key.toLowerCase();
+  if (k.includes("email") || v.includes("@")) {
+    const [user, domain] = v.split("@");
+    if (!domain) return "\u2022\u2022\u2022";
+    const u = user.length <= 2 ? `${user[0] || "\u2022"}\u2022` : `${user.slice(0, 2)}\u2022\u2022\u2022`;
+    return `${u}@${domain}`;
+  }
+  if (v.length <= 4) return "\u2022\u2022\u2022\u2022";
+  return `\u2022\u2022\u2022\u2022${v.slice(-4)}`;
+}
+function maskCardValues(values, fields) {
+  const out = {};
+  const vals = values || {};
+  for (const f of fields) {
+    const v = vals[f.key];
+    if (v == null || v === "") continue;
+    if (isPhoneMetaKey(f.key)) continue;
+    const sensitive = f.type === "email" || f.type === "phone" || /iban|account|address|routing|swift|email|phone|wallet/i.test(f.key);
+    out[f.key] = sensitive ? maskValue(f.key, v) : v;
+  }
+  return out;
+}
+
+// server/finance/salaryPayoutAttach.ts
+var METHOD_LABEL = {
+  paypal: "PayPal",
+  bank_account: "Bank",
+  wallet: "Wallet"
+};
+function detailsLine(details) {
+  const parts = [];
+  for (const [k, v] of Object.entries(details || {})) {
+    if (isPhoneMetaKey(k)) continue;
+    if (!String(v || "").trim()) continue;
+    parts.push(`${k}: ${v}`);
+  }
+  return parts.join(" \xB7 ") || "\u2014";
+}
+function pickPrimaryCard(cards) {
+  if (!cards.length) return null;
+  const primary = cards.find((c) => c.is_primary === true);
+  if (primary) return primary;
+  return [...cards].sort(
+    (a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || ""))
+  )[0];
+}
+async function loadSalaryPayoutDetailsByUserIds(userIds, opts) {
+  const out = /* @__PURE__ */ new Map();
+  const ids = Array.from(new Set((userIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
+  if (!ids.length || !isSupabaseAdminConfigured()) return out;
+  const client = getSupabaseAdmin();
+  if (!client) return out;
+  const fieldMap = /* @__PURE__ */ new Map();
+  const { data: templates } = await client.from("payout_method_templates").select("*");
+  for (const row of templates || []) {
+    const t = mapTemplateRow(row);
+    if (t) fieldMap.set(t.methodKey, t.fields);
+  }
+  const cardsByUser = /* @__PURE__ */ new Map();
+  const chunkSize = 200;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+    const { data, error } = await client.from("user_payout_cards").select("id, user_id, method_key, country_code, values_json, is_primary, updated_at").in("user_id", chunk);
+    if (error) {
+      console.warn("[finance/salaryPayoutAttach] load cards:", error.message);
+      continue;
+    }
+    for (const row of data || []) {
+      const uid = String(row.user_id);
+      const list = cardsByUser.get(uid) || [];
+      list.push(row);
+      cardsByUser.set(uid, list);
+    }
+  }
+  const mask = opts?.mask === true;
+  for (const uid of ids) {
+    const card = pickPrimaryCard(cardsByUser.get(uid) || []);
+    if (!card) continue;
+    if (!isPayoutMethodKey(card.method_key)) continue;
+    const methodKey = card.method_key;
+    const values = card.values_json && typeof card.values_json === "object" && !Array.isArray(card.values_json) ? card.values_json : {};
+    const fields = fieldMap.get(methodKey) || [];
+    const details = mask ? maskCardValues(
+      Object.fromEntries(
+        Object.entries(values).map(([k, v]) => [k, v == null ? "" : String(v)])
+      ),
+      fields
+    ) : Object.fromEntries(
+      Object.entries(values).filter(([k]) => !isPhoneMetaKey(k)).map(([k, v]) => [k, v == null ? "" : String(v)]).filter(([, v]) => String(v).trim())
+    );
+    const countryCode = String(card.country_code || "").toUpperCase();
+    const methodLabel = METHOD_LABEL[methodKey];
+    const summaryCore = mask ? formatMaskedDetailsLine(details) : detailsLine(details);
+    out.set(uid, {
+      methodKey,
+      methodLabel,
+      countryCode,
+      isPrimary: card.is_primary === true,
+      details,
+      summary: `${methodLabel} (${countryCode || "\u2014"}): ${summaryCore}`
+    });
+  }
+  return out;
+}
+function attachPayoutToPayee(payee, map) {
+  return {
+    ...payee,
+    payout: map.get(payee.userId) || null
+  };
+}
+
+// server/finance/salaryPeriodView.ts
+function worstAck(statuses) {
+  if (statuses.some((s) => s === "pending")) return "pending";
+  if (statuses.some((s) => s === "admin_paid")) return "admin_paid";
+  return "acknowledged";
+}
+function aggregatePayeeLines(lines, profile) {
+  if (!lines.length) return null;
+  const userId = String(lines[0].payee_user_id);
+  const role = String(lines[0].payee_role) === "team_leader" ? "team_leader" : "host";
+  const components = lines.map((l) => ({
+    component: String(l.component || "other"),
+    amountCoins: Number(l.amount_coins) || 0,
+    amountUsd: Number(l.amount_usd) || 0
+  }));
+  const amountCoins = components.reduce((s, c) => s + c.amountCoins, 0);
+  const amountUsd = components.reduce((s, c) => s + c.amountUsd, 0);
+  const ackStatus = worstAck(
+    lines.map((l) => normalizePayeeSalaryStatus(l.host_salary_status))
+  );
+  return {
+    userId,
+    name: profile?.name ?? null,
+    email: profile?.email ?? null,
+    role,
+    amountCoins,
+    amountUsd,
+    ackStatus,
+    batchId: String(lines[0].batch_id),
+    components
+  };
+}
+async function loadSalaryPeriodDetail(periodId) {
+  if (!isSupabaseAdminConfigured()) {
+    return { success: false, error: "Supabase admin not configured" };
+  }
+  const client = getSupabaseAdmin();
+  if (!client) return { success: false, error: "Supabase admin client unavailable" };
+  const id = String(periodId || "").trim();
+  if (!id) return { success: false, error: "Period id required" };
+  const { data: period, error: periodErr } = await client.from("settlement_periods").select("*").eq("id", id).maybeSingle();
+  if (periodErr) return { success: false, error: periodErr.message };
+  if (!period) return { success: false, error: "Period not found" };
+  const { data: batches, error: batchErr } = await client.from("settlement_batches").select("*").eq("period_id", id).order("created_at", { ascending: true });
+  if (batchErr) return { success: false, error: batchErr.message };
+  const batchList = (batches || []).filter((b) => b.status !== "cancelled");
+  const batchIds = batchList.map((b) => String(b.id));
+  const { data: lines, error: lineErr } = batchIds.length ? await client.from("settlement_line_items").select("*").in("batch_id", batchIds).order("created_at", { ascending: true }) : { data: [], error: null };
+  if (lineErr) return { success: false, error: lineErr.message };
+  const lineList = lines || [];
+  const userIds = Array.from(
+    new Set(lineList.map((l) => String(l.payee_user_id)).filter(Boolean))
+  );
+  const { data: profiles } = userIds.length ? await client.from("profiles").select("id, name, email").in("id", userIds) : { data: [] };
+  const profileById = new Map(
+    (profiles || []).map((p) => [String(p.id), p])
+  );
+  const linesByBatch = /* @__PURE__ */ new Map();
+  for (const l of lineList) {
+    const bid = String(l.batch_id);
+    const list = linesByBatch.get(bid) || [];
+    list.push(l);
+    linesByBatch.set(bid, list);
+  }
+  const tlSections = [];
+  const directHosts = [];
+  for (const batch of batchList) {
+    const bid = String(batch.id);
+    const batchLines = linesByBatch.get(bid) || [];
+    if (batch.batch_kind === "team_leader_bundle") {
+      const tlId = String(batch.team_leader_id || batch.payee_user_id);
+      const byPayee = /* @__PURE__ */ new Map();
+      for (const l of batchLines) {
+        const uid = String(l.payee_user_id);
+        const list = byPayee.get(uid) || [];
+        list.push(l);
+        byPayee.set(uid, list);
+      }
+      const tlLines = (byPayee.get(tlId) || []).filter(
+        (l) => l.payee_role === "team_leader"
+      );
+      const tlHostLines = (byPayee.get(tlId) || []).filter(
+        (l) => l.payee_role === "host"
+      );
+      const teamLeader = aggregatePayeeLines(
+        tlLines.length ? tlLines : [],
+        profileById.get(tlId)
+      );
+      const tlRow = teamLeader || {
+        userId: tlId,
+        name: profileById.get(tlId)?.name ?? null,
+        email: profileById.get(tlId)?.email ?? null,
+        role: "team_leader",
+        amountCoins: 0,
+        amountUsd: 0,
+        ackStatus: "pending",
+        batchId: bid,
+        components: []
+      };
+      const hosts = [];
+      for (const [uid, pls] of byPayee.entries()) {
+        if (uid === tlId) {
+          if (tlHostLines.length) {
+            const hostSelf = aggregatePayeeLines(tlHostLines, profileById.get(uid));
+            if (hostSelf) hosts.push(hostSelf);
+          }
+          continue;
+        }
+        const hostLines = pls.filter((l) => l.payee_role === "host");
+        const row = aggregatePayeeLines(hostLines, profileById.get(uid));
+        if (row) hosts.push(row);
+      }
+      hosts.sort((a, b) => b.amountUsd - a.amountUsd);
+      const payeesForAck = [tlRow, ...hosts].filter(
+        (p) => p.components.length > 0 || p.role === "team_leader"
+      );
+      const uniquePayees = /* @__PURE__ */ new Map();
+      for (const l of batchLines) {
+        const uid = String(l.payee_user_id);
+        const st = normalizePayeeSalaryStatus(l.host_salary_status);
+        const prev = uniquePayees.get(uid);
+        if (!prev) uniquePayees.set(uid, st);
+        else uniquePayees.set(uid, worstAck([prev, st]));
+      }
+      const ackTotal2 = uniquePayees.size;
+      const ackDone = Array.from(uniquePayees.values()).filter(
+        (s) => s === "acknowledged"
+      ).length;
+      const hostsPaidCount = hosts.filter((h) => h.ackStatus !== "pending").length;
+      const hostsAckedCount = hosts.filter((h) => h.ackStatus === "acknowledged").length;
+      tlSections.push({
+        teamLeaderId: tlId,
+        teamLeader: tlRow,
+        hosts,
+        totalHostSalaryUsd: Number(batch.total_host_salary_usd) || 0,
+        totalTlCommissionUsd: Number(batch.total_tl_commission_usd) || 0,
+        totalDueUsd: Number(batch.total_due_usd) || 0,
+        batchId: bid,
+        batchStatus: String(batch.status),
+        reconcileStatus: batch.reconcile_status === "reconciled" ? "reconciled" : "unreconciled",
+        reconciledAt: batch.reconciled_at ?? null,
+        reconciledByRole: batch.reconciled_by_role === "admin" || batch.reconciled_by_role === "team_leader" ? batch.reconciled_by_role : null,
+        hostsPaidCount,
+        hostsAckedCount,
+        hostsTotal: hosts.length,
+        ackProgress: { acknowledged: ackDone, total: ackTotal2 }
+      });
+      void payeesForAck;
+    } else {
+      const byPayee = /* @__PURE__ */ new Map();
+      for (const l of batchLines) {
+        const uid = String(l.payee_user_id);
+        const list = byPayee.get(uid) || [];
+        list.push(l);
+        byPayee.set(uid, list);
+      }
+      for (const [uid, pls] of byPayee.entries()) {
+        const row = aggregatePayeeLines(pls, profileById.get(uid));
+        if (row) directHosts.push(row);
+      }
+    }
+  }
+  directHosts.sort((a, b) => b.amountUsd - a.amountUsd);
+  const allPayeeIds = Array.from(
+    /* @__PURE__ */ new Set([
+      ...tlSections.flatMap((s) => [
+        s.teamLeaderId,
+        ...s.teamLeader ? [s.teamLeader.userId] : [],
+        ...s.hosts.map((h) => h.userId)
+      ]),
+      ...directHosts.map((h) => h.userId)
+    ])
+  );
+  const payoutMap = await loadSalaryPayoutDetailsByUserIds(allPayeeIds, { mask: false });
+  for (const section of tlSections) {
+    if (section.teamLeader) {
+      section.teamLeader = attachPayoutToPayee(section.teamLeader, payoutMap);
+    }
+    section.hosts = section.hosts.map((h) => attachPayoutToPayee(h, payoutMap));
+  }
+  for (let i = 0; i < directHosts.length; i++) {
+    directHosts[i] = attachPayoutToPayee(directHosts[i], payoutMap);
+  }
+  let ackAcknowledged = 0;
+  let ackTotal = 0;
+  const payeeAck = /* @__PURE__ */ new Map();
+  for (const l of lineList) {
+    const key = `${l.batch_id}:${l.payee_user_id}`;
+    const st = normalizePayeeSalaryStatus(l.host_salary_status);
+    const prev = payeeAck.get(key);
+    if (!prev) payeeAck.set(key, st);
+    else payeeAck.set(key, worstAck([prev, st]));
+  }
+  ackTotal = payeeAck.size;
+  ackAcknowledged = Array.from(payeeAck.values()).filter((s) => s === "acknowledged").length;
+  const totals = {
+    totalDueUsd: batchList.reduce((s, b) => s + (Number(b.total_due_usd) || 0), 0),
+    totalHostSalaryUsd: batchList.reduce(
+      (s, b) => s + (Number(b.total_host_salary_usd) || 0),
+      0
+    ),
+    totalTlCommissionUsd: batchList.reduce(
+      (s, b) => s + (Number(b.total_tl_commission_usd) || 0),
+      0
+    ),
+    outstandingDueUsd: batchList.filter((b) => b.status === "pending_admin_pay").reduce((s, b) => s + (Number(b.total_due_usd) || 0), 0),
+    batchCount: batchList.length,
+    pendingAdminPayCount: batchList.filter((b) => b.status === "pending_admin_pay").length,
+    adminPaidCount: batchList.filter(
+      (b) => b.status === "admin_paid" || b.status === "tl_confirmed"
+    ).length,
+    fullyAckedBatchCount: batchList.filter((b) => b.status === "tl_confirmed").length,
+    unreconciledCount: batchList.filter(
+      (b) => b.status !== "cancelled" && b.reconcile_status !== "reconciled"
+    ).length,
+    reconciledCount: batchList.filter(
+      (b) => b.status !== "cancelled" && b.reconcile_status === "reconciled"
+    ).length
+  };
+  const canMarkPaid = batchList.some(
+    (b) => b.status === "pending_admin_pay" && b.reconcile_status === "reconciled"
+  );
+  const paymentReferences = Array.from(
+    new Set(
+      batchList.map((b) => b.payment_reference ? String(b.payment_reference) : "").filter(Boolean)
+    )
+  );
+  return {
+    success: true,
+    data: {
+      period: {
+        id: period.id,
+        cycleType: period.cycle_type,
+        periodStart: period.period_start,
+        periodEnd: period.period_end,
+        status: period.status,
+        closedAt: period.closed_at ?? null,
+        configSnapshot: period.config_snapshot || {}
+      },
+      tlSections,
+      directHosts,
+      totals,
+      ackProgress: { acknowledged: ackAcknowledged, total: ackTotal },
+      canMarkPaid,
+      paymentReferences
+    }
+  };
+}
+async function listSalaryPeriods(opts) {
+  if (!isSupabaseAdminConfigured()) {
+    return { success: false, error: "Supabase admin not configured" };
+  }
+  const client = getSupabaseAdmin();
+  if (!client) return { success: false, error: "Supabase admin client unavailable" };
+  const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 100);
+  const { data: periods, error } = await client.from("settlement_periods").select("id, cycle_type, period_start, period_end, status, closed_at").eq("status", "closed").order("period_end", { ascending: false }).limit(limit);
+  if (error) return { success: false, error: error.message };
+  const out = [];
+  for (const p of periods || []) {
+    const detail = await loadSalaryPeriodDetail(p.id);
+    if (!detail.success || !detail.data) continue;
+    const d = detail.data;
+    out.push({
+      periodId: d.period.id,
+      cycleType: d.period.cycleType,
+      periodStart: d.period.periodStart,
+      periodEnd: d.period.periodEnd,
+      status: d.period.status,
+      closedAt: d.period.closedAt,
+      totalDueUsd: d.totals.totalDueUsd,
+      outstandingDueUsd: d.totals.outstandingDueUsd,
+      batchCount: d.totals.batchCount,
+      pendingAdminPayCount: d.totals.pendingAdminPayCount,
+      adminPaidCount: d.totals.adminPaidCount,
+      unreconciledCount: d.totals.unreconciledCount,
+      reconciledCount: d.totals.reconciledCount,
+      ackProgress: d.ackProgress,
+      canMarkPaid: d.canMarkPaid
+    });
+  }
+  return { success: true, periods: out };
+}
+
+// server/finance/salaryEstimatePreview.ts
+init_supabaseAdmin();
+function computeHostTargetBonus2(opts) {
+  const tier = computePerformanceTier(opts.hours, opts.totalCoins, opts.thresholds);
+  const metBronze = opts.hours >= opts.thresholds.bronzeHours && opts.totalCoins >= opts.thresholds.bronzeCoins;
+  let bonusUsd = 0;
+  if (tier === "gold" || tier === "silver") {
+    bonusUsd = targetBonusUsdForTier(tier, opts.thresholds);
+  } else if (metBronze) {
+    bonusUsd = targetBonusUsdForTier("bronze", opts.thresholds);
+  }
+  return {
+    tier,
+    bonusUsd,
+    bonusCoins: bonusUsd > 0 ? usdToCoins(bonusUsd, opts.fxRatio) : 0
+  };
+}
+function linesToPayeeRow(batchId, payeeUserId, role, lines, profile) {
+  const mine = lines.filter((l) => l.payeeUserId === payeeUserId && l.payeeRole === role);
+  const components = mine.map((l) => ({
+    component: l.component,
+    amountCoins: l.amountCoins,
+    amountUsd: l.amountUsd
+  }));
+  return {
+    userId: payeeUserId,
+    name: profile?.name ?? null,
+    email: profile?.email ?? null,
+    role,
+    amountCoins: components.reduce((s, c) => s + c.amountCoins, 0),
+    amountUsd: components.reduce((s, c) => s + c.amountUsd, 0),
+    ackStatus: "pending",
+    batchId,
+    components
+  };
+}
+function batchToSections(batches, profiles) {
+  const tlSections = [];
+  const directHosts = [];
+  batches.forEach((batch, idx) => {
+    const batchId = `estimate-${idx + 1}`;
+    if (batch.batchKind === "team_leader_bundle" && batch.teamLeaderId) {
+      const hostIds = [
+        ...new Set(
+          batch.lineItems.filter((l) => l.payeeRole === "host").map((l) => l.payeeUserId)
+        )
+      ];
+      const hosts = hostIds.map(
+        (id) => linesToPayeeRow(batchId, id, "host", batch.lineItems, profiles.get(id))
+      ).filter((h) => h.amountUsd > 0 || h.amountCoins > 0 || h.components.length > 0).sort((a, b) => b.amountUsd - a.amountUsd);
+      const teamLeader = linesToPayeeRow(
+        batchId,
+        batch.teamLeaderId,
+        "team_leader",
+        batch.lineItems,
+        profiles.get(batch.teamLeaderId)
+      );
+      tlSections.push({
+        teamLeaderId: batch.teamLeaderId,
+        teamLeader: teamLeader.amountUsd > 0 || teamLeader.components.length > 0 ? teamLeader : null,
+        hosts,
+        totalHostSalaryUsd: batch.totalHostSalaryUsd,
+        totalTlCommissionUsd: batch.totalTlCommissionUsd,
+        totalDueUsd: batch.totalDueUsd,
+        batchId,
+        batchStatus: "estimate",
+        ackProgress: { acknowledged: 0, total: hosts.length + (teamLeader.components.length ? 1 : 0) }
+      });
+    } else {
+      const hostId = batch.payeeUserId;
+      const row = linesToPayeeRow(batchId, hostId, "host", batch.lineItems, profiles.get(hostId));
+      if (row.amountUsd > 0 || row.components.length > 0) directHosts.push(row);
+    }
+  });
+  tlSections.sort((a, b) => b.totalDueUsd - a.totalDueUsd);
+  directHosts.sort((a, b) => b.amountUsd - a.amountUsd);
+  return { tlSections, directHosts };
+}
+async function buildOpenPeriodEstimate(at = /* @__PURE__ */ new Date()) {
+  if (!isSupabaseAdminConfigured()) {
+    return { success: false, error: "Supabase admin not configured" };
+  }
+  const client = getSupabaseAdmin();
+  if (!client) return { success: false, error: "Supabase admin client unavailable" };
+  const config = await loadFinanceSystemConfig();
+  const ensured = await ensureOpenPeriod({ at, config });
+  if (!ensured.success || !ensured.period) {
+    return { success: false, error: ensured.error || "No open settlement period" };
+  }
+  const period = ensured.period;
+  const periodStart = period.periodStart;
+  const periodEndExclusive = toIso(at);
+  const periodId = period.id;
+  const snapshot = freezeFinanceConfigSnapshot(config, { includeFrozenAt: false });
+  const fxRatio = Number(snapshot.coin_usd_peg) || config.coinUsdPeg;
+  const thresholds = config.thresholds;
+  const accrual = await aggregateWalletLedgerEarnings({
+    periodStart,
+    periodEnd: periodEndExclusive,
+    client
+  });
+  if (!accrual.success) {
+    return { success: false, error: accrual.error || "Accrual query failed" };
+  }
+  const { data: metricsRows, error: metricsError } = await client.from("creator_metrics").select("*");
+  if (metricsError) return { success: false, error: metricsError.message };
+  const metricsList = metricsRows || [];
+  const userIds = Array.from(accrual.byUser.keys());
+  for (const m of metricsList) {
+    if (m.creator_id && !accrual.byUser.has(m.creator_id)) {
+      userIds.push(String(m.creator_id));
+    }
+  }
+  const profileById = /* @__PURE__ */ new Map();
+  if (userIds.length) {
+    const chunkSize = 200;
+    for (let i = 0; i < userIds.length; i += chunkSize) {
+      const chunk = userIds.slice(i, i + chunkSize);
+      const { data: profiles, error: profileError } = await client.from("profiles").select("id, team_leader_id, created_by_id, role, coin_earn_override_rate, name, email").in("id", chunk);
+      if (profileError) return { success: false, error: profileError.message };
+      for (const p of profiles || []) {
+        profileById.set(String(p.id), {
+          teamLeaderId: p.team_leader_id || p.created_by_id || null,
+          role: String(p.role || ""),
+          coinEarnOverrideRate: p.coin_earn_override_rate != null ? Number(p.coin_earn_override_rate) : null,
+          name: p.name != null ? String(p.name) : null,
+          email: p.email != null ? String(p.email) : null
+        });
+      }
+    }
+  }
+  const metricsByCreator = /* @__PURE__ */ new Map();
+  const metricsHoursCoins = /* @__PURE__ */ new Map();
+  for (const m of metricsList) {
+    const cid = String(m.creator_id);
+    metricsByCreator.set(cid, m);
+    metricsHoursCoins.set(cid, {
+      hours: Number(m.active_online_hours || 0),
+      coins: Number(m.total_target_coins) || Number(m.coins_earned_from_calls || 0) + Number(m.coins_earned_from_gifts || 0)
+    });
+  }
+  const burnRates = resolveEconomyBurnRates(snapshot);
+  const trueUpAgg = await aggregateHostCallBurnForTrueUp({
+    periodStart,
+    periodEnd: periodEndExclusive,
+    periodId,
+    client
+  });
+  if (!trueUpAgg.success) {
+    return { success: false, error: trueUpAgg.error || "True-up accrual failed" };
+  }
+  const creatorHostIds = Array.from(
+    /* @__PURE__ */ new Set([
+      ...Array.from(trueUpAgg.byHost.keys()),
+      ...Array.from(metricsByCreator.keys()).filter((id) => {
+        const role = profileById.get(id)?.role || "";
+        return role === "female_creator" || role === "female_host";
+      })
+    ])
+  ).filter((id) => {
+    const role = profileById.get(id)?.role || "";
+    if (!role) return true;
+    return role === "female_creator" || role === "female_host";
+  });
+  const overrideByHost = /* @__PURE__ */ new Map();
+  for (const id of creatorHostIds) {
+    overrideByHost.set(id, profileById.get(id)?.coinEarnOverrideRate);
+  }
+  const trueUpPlans = planHostShareTrueUps({
+    hostIds: creatorHostIds,
+    aggByHost: trueUpAgg.byHost,
+    metricsByCreator: metricsHoursCoins,
+    overrideByHost,
+    thresholds,
+    targetSharePercent: burnRates.femaleHostTargetSharePercent,
+    burnConfig: snapshot
+  });
+  const hostTrueUpByUser = /* @__PURE__ */ new Map();
+  for (const plan of trueUpPlans) {
+    if (plan.skippedAlreadyPosted) {
+      const already = trueUpAgg.byHost.get(plan.hostId)?.alreadyTrueUpCoins || 0;
+      if (already > 0) hostTrueUpByUser.set(plan.hostId, already);
+      continue;
+    }
+    if (plan.trueUpCoins > 0) hostTrueUpByUser.set(plan.hostId, plan.trueUpCoins);
+  }
+  const hostIds = /* @__PURE__ */ new Set();
+  const tlCommission = /* @__PURE__ */ new Map();
+  const hostBonusByUser = /* @__PURE__ */ new Map();
+  for (const [userId, totals] of accrual.byUser.entries()) {
+    if (totals.hostEarnCoins > 0 || totals.giftHostEarnCoins > 0) {
+      hostIds.add(userId);
+    }
+    if (totals.tlEarnCoins > 0) {
+      tlCommission.set(userId, (tlCommission.get(userId) || 0) + totals.tlEarnCoins);
+    }
+  }
+  for (const id of hostTrueUpByUser.keys()) hostIds.add(id);
+  for (const m of metricsList) {
+    const cid = String(m.creator_id);
+    const hours = Number(m.active_online_hours || 0);
+    const coins = Number(m.total_target_coins) || Number(m.coins_earned_from_calls || 0) + Number(m.coins_earned_from_gifts || 0);
+    const bonus = computeHostTargetBonus2({
+      hours,
+      totalCoins: coins,
+      thresholds,
+      fxRatio
+    });
+    if (bonus.bonusUsd > 0) {
+      hostIds.add(cid);
+      hostBonusByUser.set(cid, { ...bonus, hours, coins });
+    } else if (hours > 0 || coins > 0) {
+      hostBonusByUser.set(cid, { ...bonus, hours, coins });
+    }
+  }
+  const builtAccruals = [];
+  for (const hostId of hostIds) {
+    const totals = accrual.byUser.get(hostId);
+    const profile = profileById.get(hostId);
+    const metrics = metricsByCreator.get(hostId);
+    const teamLeaderId = metrics?.agency_leader_id || profile?.teamLeaderId || null;
+    let bonus = hostBonusByUser.get(hostId);
+    if (!bonus && metrics) {
+      const hours = Number(metrics.active_online_hours || 0);
+      const coins = Number(metrics.total_target_coins) || Number(metrics.coins_earned_from_calls || 0) + Number(metrics.coins_earned_from_gifts || 0);
+      bonus = {
+        ...computeHostTargetBonus2({
+          hours,
+          totalCoins: coins,
+          thresholds,
+          fxRatio
+        }),
+        hours,
+        coins
+      };
+      hostBonusByUser.set(hostId, bonus);
+    }
+    builtAccruals.push({
+      userId: hostId,
+      teamLeaderId,
+      role: "host",
+      callEarningsCoins: totals?.callHostEarnCoins || 0,
+      giftEarningsCoins: totals?.giftHostEarnCoins || 0,
+      targetShareTrueUpCoins: hostTrueUpByUser.get(hostId) || 0,
+      targetBonusCoins: bonus?.bonusCoins || 0,
+      targetBonusUsd: bonus?.bonusUsd || 0,
+      breakdown: {
+        performanceTier: bonus?.tier || "bronze",
+        activeOnlineHours: bonus?.hours ?? Number(metrics?.active_online_hours || 0),
+        totalTargetCoins: bonus?.coins ?? 0
+      }
+    });
+  }
+  for (const [tlId, coins] of tlCommission.entries()) {
+    builtAccruals.push({
+      userId: tlId,
+      role: "team_leader",
+      tlCommissionCoins: coins,
+      breakdown: { source: "wallet_ledger.TL_EARN" }
+    });
+  }
+  for (const a of builtAccruals) {
+    if (a.role === "host" && a.teamLeaderId && !tlCommission.has(a.teamLeaderId)) {
+      if (!builtAccruals.some((x) => x.role === "team_leader" && x.userId === a.teamLeaderId)) {
+        builtAccruals.push({
+          userId: a.teamLeaderId,
+          role: "team_leader",
+          tlCommissionCoins: 0
+        });
+      }
+    }
+  }
+  const built = buildSettlementBatches({
+    accruals: builtAccruals,
+    fxRatio
+  }).filter((b) => b.totalDueUsd > 0 || b.lineItems.length > 0);
+  const payeeIds = /* @__PURE__ */ new Set();
+  for (const b of built) {
+    payeeIds.add(b.payeeUserId);
+    if (b.teamLeaderId) payeeIds.add(b.teamLeaderId);
+    for (const li of b.lineItems) payeeIds.add(li.payeeUserId);
+  }
+  const missing = [...payeeIds].filter((id) => !profileById.has(id));
+  if (missing.length) {
+    const { data: extra } = await client.from("profiles").select("id, name, email, team_leader_id, created_by_id, role, coin_earn_override_rate").in("id", missing);
+    for (const p of extra || []) {
+      profileById.set(String(p.id), {
+        teamLeaderId: p.team_leader_id || p.created_by_id || null,
+        role: String(p.role || ""),
+        coinEarnOverrideRate: p.coin_earn_override_rate != null ? Number(p.coin_earn_override_rate) : null,
+        name: p.name != null ? String(p.name) : null,
+        email: p.email != null ? String(p.email) : null
+      });
+    }
+  }
+  const profileMap = new Map(
+    [...profileById.entries()].map(([id, p]) => [id, { name: p.name, email: p.email }])
+  );
+  const { tlSections, directHosts } = batchToSections(built, profileMap);
+  const allPayeeIds = Array.from(
+    /* @__PURE__ */ new Set([
+      ...tlSections.flatMap((s) => [
+        s.teamLeaderId,
+        ...s.teamLeader ? [s.teamLeader.userId] : [],
+        ...s.hosts.map((h) => h.userId)
+      ]),
+      ...directHosts.map((h) => h.userId)
+    ])
+  );
+  const payoutMap = await loadSalaryPayoutDetailsByUserIds(allPayeeIds, { mask: false });
+  for (const section of tlSections) {
+    if (section.teamLeader) {
+      section.teamLeader = attachPayoutToPayee(section.teamLeader, payoutMap);
+    }
+    section.hosts = section.hosts.map((h) => attachPayoutToPayee(h, payoutMap));
+  }
+  for (let i = 0; i < directHosts.length; i++) {
+    directHosts[i] = attachPayoutToPayee(directHosts[i], payoutMap);
+  }
+  const totalHostSalaryUsd = built.reduce((s, b) => s + b.totalHostSalaryUsd, 0);
+  const totalTlCommissionUsd = built.reduce((s, b) => s + b.totalTlCommissionUsd, 0);
+  const totalDueUsd = built.reduce((s, b) => s + b.totalDueUsd, 0);
+  return {
+    success: true,
+    data: {
+      isEstimate: true,
+      asOf: periodEndExclusive,
+      periodClock: {
+        periodId,
+        cycleType: period.cycleType,
+        periodStart: String(period.periodStart),
+        periodEnd: String(period.periodEnd),
+        closeScheduledAt: period.closeScheduledAt ? String(period.closeScheduledAt) : null,
+        periodStatus: period.status,
+        accrualEnd: periodEndExclusive
+      },
+      tlSections,
+      directHosts,
+      totals: {
+        totalDueUsd: Math.round(totalDueUsd * 1e4) / 1e4,
+        totalHostSalaryUsd: Math.round(totalHostSalaryUsd * 1e4) / 1e4,
+        totalTlCommissionUsd: Math.round(totalTlCommissionUsd * 1e4) / 1e4,
+        outstandingDueUsd: Math.round(totalDueUsd * 1e4) / 1e4,
+        batchCount: built.length,
+        pendingAdminPayCount: built.length,
+        adminPaidCount: 0,
+        fullyAckedBatchCount: 0
+      },
+      disclaimer: "Estimate only \u2014 accrued from period start until now. Not payable until period close creates settlement batches."
+    }
+  };
+}
+function filterForTeamLeader(data, tlId) {
+  const section = data.tlSections.find((s) => s.teamLeaderId === tlId);
+  const tlSections = section ? [section] : [];
+  const totals = {
+    totalDueUsd: section?.totalDueUsd || 0,
+    totalHostSalaryUsd: section?.totalHostSalaryUsd || 0,
+    totalTlCommissionUsd: section?.totalTlCommissionUsd || 0,
+    outstandingDueUsd: section?.totalDueUsd || 0,
+    batchCount: section ? 1 : 0,
+    pendingAdminPayCount: section ? 1 : 0,
+    adminPaidCount: 0,
+    fullyAckedBatchCount: 0
+  };
+  return {
+    ...data,
+    tlSections,
+    directHosts: [],
+    totals
+  };
+}
+function filterForHost(data, hostId) {
+  const hosts = [];
+  for (const s of data.tlSections) {
+    const hit = s.hosts.find((h) => h.userId === hostId);
+    if (hit) hosts.push(hit);
+  }
+  const direct = data.directHosts.filter((h) => h.userId === hostId);
+  const all = [...hosts, ...direct];
+  const totalUsd = all.reduce((s, h) => s + h.amountUsd, 0);
+  return {
+    ...data,
+    tlSections: [],
+    directHosts: all,
+    totals: {
+      totalDueUsd: Math.round(totalUsd * 1e4) / 1e4,
+      totalHostSalaryUsd: Math.round(totalUsd * 1e4) / 1e4,
+      totalTlCommissionUsd: 0,
+      outstandingDueUsd: Math.round(totalUsd * 1e4) / 1e4,
+      batchCount: all.length ? 1 : 0,
+      pendingAdminPayCount: all.length ? 1 : 0,
+      adminPaidCount: 0,
+      fullyAckedBatchCount: 0
+    }
+  };
+}
+async function buildSalaryEstimatePreview(opts) {
+  const built = await buildOpenPeriodEstimate(opts.at ?? /* @__PURE__ */ new Date());
+  if (!built.success || !built.data) return built;
+  if (opts.scope === "admin") return built;
+  const actorId = String(opts.actorUserId || "").trim();
+  if (!actorId) return { success: false, error: "Unauthorized" };
+  if (opts.scope === "team_leader") {
+    const scoped = filterForTeamLeader(built.data, actorId);
+    const hostIds = scoped.tlSections.flatMap((s) => s.hosts.map((h) => h.userId));
+    if (hostIds.length) {
+      const masked = await loadSalaryPayoutDetailsByUserIds(hostIds, { mask: true });
+      for (const section of scoped.tlSections) {
+        section.hosts = section.hosts.map((h) => attachPayoutToPayee(h, masked));
+      }
+    }
+    return { success: true, data: scoped };
+  }
+  return { success: true, data: filterForHost(built.data, actorId) };
+}
+
+// server/finance/salaryExport.ts
+var import_exceljs = __toESM(require("exceljs"), 1);
+var import_jspdf = require("jspdf");
+var import_jspdf_autotable = __toESM(require("jspdf-autotable"), 1);
+
 // shared/finance/hostEarningsBreakdown.ts
 var EMPTY_HOST_EARNINGS_BREAKDOWN = {
   callEarningsCoins: 0,
@@ -3110,7 +4499,7 @@ function labelSettlementComponent(component) {
     case "target_bonus":
       return "Target cash bonus";
     case "tl_commission":
-      return "TL commission";
+      return "Agency commission";
     default:
       return component.replace(/_/g, " ");
   }
@@ -3145,6 +4534,1706 @@ function summarizeHostSettlementLines(lines) {
   }
   return out;
 }
+
+// server/finance/salaryExport.ts
+function formatUsd(n) {
+  return Number(n || 0).toFixed(4);
+}
+function componentCols(payee) {
+  if (!payee) {
+    return { call: "0", gift: "0", trueUp: "0", tierBonus: "0", coins: 0 };
+  }
+  if (payee.role === "team_leader") {
+    return {
+      call: formatUsd(payee.amountUsd),
+      gift: "0",
+      trueUp: "0",
+      tierBonus: "0",
+      coins: payee.amountCoins
+    };
+  }
+  const b = summarizeHostSettlementLines(payee.components || []);
+  return {
+    call: formatUsd(b.callEarningsUsd),
+    gift: formatUsd(b.giftEarningsUsd),
+    trueUp: formatUsd(b.targetShareTrueUpUsd),
+    tierBonus: formatUsd(b.targetBonusUsd),
+    coins: payee.amountCoins
+  };
+}
+function formatWindow(start, end) {
+  try {
+    return `${new Date(start).toISOString().slice(0, 10)} \u2192 ${new Date(end).toISOString().slice(0, 10)} UTC`;
+  } catch {
+    return `${start} \u2192 ${end}`;
+  }
+}
+function pegFromDetail(detail) {
+  const snap = detail.period.configSnapshot || {};
+  const peg = Number(snap.coin_usd_peg ?? snap.female_payout_ratio_usd ?? 0);
+  return peg ? peg.toFixed(6) : "\u2014";
+}
+async function buildSalaryPeriodXlsx(periodId) {
+  const loaded = await loadSalaryPeriodDetail(periodId);
+  if (!loaded.success || !loaded.data) {
+    return { success: false, error: loaded.error || "Failed to load period" };
+  }
+  const d = loaded.data;
+  const wb = new import_exceljs.default.Workbook();
+  wb.creator = "Minglecall Finance";
+  wb.created = /* @__PURE__ */ new Date();
+  const sheet = wb.addWorksheet("Salary disbursement");
+  sheet.columns = [
+    { header: "Section", key: "section", width: 22 },
+    { header: "Role", key: "role", width: 14 },
+    { header: "Name", key: "name", width: 24 },
+    { header: "User ID", key: "userId", width: 38 },
+    { header: "Email", key: "email", width: 28 },
+    { header: "Payout method", key: "payoutMethod", width: 14 },
+    { header: "Payout country", key: "payoutCountry", width: 12 },
+    { header: "Payout details", key: "payoutDetails", width: 48 },
+    { header: "Call USD", key: "call", width: 12 },
+    { header: "Gift USD", key: "gift", width: 12 },
+    { header: "True-up USD", key: "trueUp", width: 12 },
+    { header: "Tier bonus USD", key: "tierBonus", width: 14 },
+    { header: "Amount USD", key: "usd", width: 14 },
+    { header: "Amount coins", key: "coins", width: 14 },
+    { header: "Ack status", key: "ack", width: 14 },
+    { header: "Batch ID", key: "batchId", width: 38 }
+  ];
+  sheet.insertRow(1, ["Minglecall \u2014 Salary disbursement"]);
+  sheet.insertRow(2, [
+    `Period: ${formatWindow(d.period.periodStart, d.period.periodEnd)} \xB7 ${d.period.cycleType}`
+  ]);
+  sheet.insertRow(3, [
+    `Peg: ${pegFromDetail(d)} \xB7 Generated: ${(/* @__PURE__ */ new Date()).toISOString()} \xB7 Payment refs: ${d.paymentReferences.join(", ") || "\u2014"}`
+  ]);
+  sheet.insertRow(4, [
+    `Totals \u2014 Due $${formatUsd(d.totals.totalDueUsd)} \xB7 Hosts $${formatUsd(
+      d.totals.totalHostSalaryUsd
+    )} \xB7 TL $${formatUsd(d.totals.totalTlCommissionUsd)} \xB7 Ack ${d.ackProgress.acknowledged}/${d.ackProgress.total}`
+  ]);
+  sheet.insertRow(5, []);
+  const headerRow = sheet.getRow(6);
+  headerRow.values = [
+    "Section",
+    "Role",
+    "Name",
+    "User ID",
+    "Email",
+    "Payout method",
+    "Payout country",
+    "Payout details",
+    "Call USD",
+    "Gift USD",
+    "True-up USD",
+    "Tier bonus USD",
+    "Amount USD",
+    "Amount coins",
+    "Ack status",
+    "Batch ID"
+  ];
+  headerRow.font = { bold: true };
+  const payoutCols = (p) => [
+    p.payout?.methodLabel || "\u2014",
+    p.payout?.countryCode || "\u2014",
+    p.payout?.summary || "No payout card"
+  ];
+  let rowIdx = 7;
+  for (const section of d.tlSections) {
+    const sectionLabel = `TL ${section.teamLeader?.name || section.teamLeaderId.slice(0, 8)}`;
+    if (section.teamLeader) {
+      const tl = section.teamLeader;
+      const c = componentCols(tl);
+      sheet.getRow(rowIdx).values = [
+        sectionLabel,
+        "team_leader",
+        tl.name || "",
+        tl.userId,
+        tl.email || "",
+        ...payoutCols(tl),
+        c.call,
+        c.gift,
+        c.trueUp,
+        c.tierBonus,
+        formatUsd(tl.amountUsd),
+        tl.amountCoins,
+        tl.ackStatus,
+        tl.batchId
+      ];
+      rowIdx += 1;
+    }
+    for (const host of section.hosts) {
+      const c = componentCols(host);
+      sheet.getRow(rowIdx).values = [
+        sectionLabel,
+        "host",
+        host.name || "",
+        host.userId,
+        host.email || "",
+        ...payoutCols(host),
+        c.call,
+        c.gift,
+        c.trueUp,
+        c.tierBonus,
+        formatUsd(host.amountUsd),
+        host.amountCoins,
+        host.ackStatus,
+        host.batchId
+      ];
+      rowIdx += 1;
+    }
+  }
+  for (const host of d.directHosts) {
+    const c = componentCols(host);
+    sheet.getRow(rowIdx).values = [
+      "Direct hosts",
+      "host",
+      host.name || "",
+      host.userId,
+      host.email || "",
+      ...payoutCols(host),
+      c.call,
+      c.gift,
+      c.trueUp,
+      c.tierBonus,
+      formatUsd(host.amountUsd),
+      host.amountCoins,
+      host.ackStatus,
+      host.batchId
+    ];
+    rowIdx += 1;
+  }
+  const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+  const filename = `salary-${d.period.cycleType}-${String(d.period.periodStart).slice(0, 10)}.xlsx`;
+  return { success: true, buffer, filename };
+}
+async function buildSalaryPeriodPdf(periodId) {
+  const loaded = await loadSalaryPeriodDetail(periodId);
+  if (!loaded.success || !loaded.data) {
+    return { success: false, error: loaded.error || "Failed to load period" };
+  }
+  const d = loaded.data;
+  const doc = new import_jspdf.jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  doc.setFontSize(14);
+  doc.text("Minglecall \u2014 Salary disbursement", 40, 36);
+  doc.setFontSize(9);
+  doc.text(
+    `Period: ${formatWindow(d.period.periodStart, d.period.periodEnd)} \xB7 ${d.period.cycleType}`,
+    40,
+    52
+  );
+  doc.text(
+    `Peg: ${pegFromDetail(d)} \xB7 Generated: ${(/* @__PURE__ */ new Date()).toISOString()} \xB7 Refs: ${d.paymentReferences.join(", ") || "\u2014"}`,
+    40,
+    66
+  );
+  doc.text(
+    `Totals \u2014 Due $${formatUsd(d.totals.totalDueUsd)} \xB7 Hosts $${formatUsd(
+      d.totals.totalHostSalaryUsd
+    )} \xB7 TL $${formatUsd(d.totals.totalTlCommissionUsd)} \xB7 Ack ${d.ackProgress.acknowledged}/${d.ackProgress.total}`,
+    40,
+    80
+  );
+  const body = [];
+  for (const section of d.tlSections) {
+    const sectionLabel = `TL ${section.teamLeader?.name || section.teamLeaderId.slice(0, 8)}`;
+    if (section.teamLeader) {
+      const tl = section.teamLeader;
+      const c = componentCols(tl);
+      body.push([
+        sectionLabel,
+        "TL",
+        tl.name || "\u2014",
+        tl.payout?.summary || "No payout card",
+        c.call,
+        c.gift,
+        c.trueUp,
+        c.tierBonus,
+        formatUsd(tl.amountUsd),
+        tl.ackStatus
+      ]);
+    }
+    for (const host of section.hosts) {
+      const c = componentCols(host);
+      body.push([
+        sectionLabel,
+        "Host",
+        host.name || "\u2014",
+        host.payout?.summary || "No payout card",
+        c.call,
+        c.gift,
+        c.trueUp,
+        c.tierBonus,
+        formatUsd(host.amountUsd),
+        host.ackStatus
+      ]);
+    }
+  }
+  for (const host of d.directHosts) {
+    const c = componentCols(host);
+    body.push([
+      "Direct hosts",
+      "Host",
+      host.name || "\u2014",
+      host.payout?.summary || "No payout card",
+      c.call,
+      c.gift,
+      c.trueUp,
+      c.tierBonus,
+      formatUsd(host.amountUsd),
+      host.ackStatus
+    ]);
+  }
+  (0, import_jspdf_autotable.default)(doc, {
+    startY: 96,
+    head: [
+      [
+        "Section",
+        "Role",
+        "Name",
+        "Payout",
+        "Call",
+        "Gift",
+        "True-up",
+        "Tier bonus",
+        "Total USD",
+        "Ack"
+      ]
+    ],
+    body,
+    styles: { fontSize: 7, cellPadding: 2 },
+    headStyles: { fillColor: [30, 41, 59] }
+  });
+  const arrayBuffer = doc.output("arraybuffer");
+  const buffer = Buffer.from(arrayBuffer);
+  const filename = `salary-${d.period.cycleType}-${String(d.period.periodStart).slice(0, 10)}.pdf`;
+  return { success: true, buffer, filename };
+}
+
+// server/finance/earningsOverview.ts
+init_supabaseAdmin();
+
+// shared/finance/salaryComponents.ts
+var HOST_SALARY_LINE_COMPONENTS = [
+  "call_earnings",
+  "gift_earnings",
+  "target_share_trueup",
+  "target_bonus"
+];
+var HOST_SALARY_FINANCIAL_ENTRY_TYPES = [
+  "HOST_EARN",
+  "TARGET_SHARE_TRUEUP",
+  "TARGET_BONUS"
+];
+var HOST_SALARY_WALLET_TYPES = ["HOST_EARN", "TARGET_SHARE_TRUEUP"];
+var NON_SALARY_REWARD_WALLET_TYPES = [
+  "REWARD_STREAK",
+  "REWARD_MISSION",
+  "REWARD_MASTER_CHEST"
+];
+function isGiftWalletMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object") return false;
+  const m = metadata;
+  const kind = String(m.kind || m.source || m.category || "").toLowerCase();
+  return kind === "gift" || kind === "virtual_gift" || m.is_gift === true;
+}
+function isNonSalaryRewardType(transactionType) {
+  return NON_SALARY_REWARD_WALLET_TYPES.includes(String(transactionType));
+}
+function isHostSalaryFinancialEntryType(entryType) {
+  return HOST_SALARY_FINANCIAL_ENTRY_TYPES.includes(String(entryType));
+}
+function labelEarningsMoneyCategory(cat) {
+  switch (cat) {
+    case "call":
+      return "Call earn";
+    case "gift":
+      return "Gift earn";
+    case "true_up":
+      return "Share true-up";
+    case "tier_bonus":
+      return "Tier cash bonus";
+    case "tl_commission":
+      return "Agency commission";
+    case "platform":
+      return "Platform retained";
+    case "reward":
+      return "Reward (not salary)";
+    default:
+      return "Other";
+  }
+}
+function categoryFromSettlementComponent(component) {
+  switch (String(component)) {
+    case "call_earnings":
+      return "call";
+    case "gift_earnings":
+      return "gift";
+    case "target_share_trueup":
+      return "true_up";
+    case "target_bonus":
+      return "tier_bonus";
+    case "tl_commission":
+      return "tl_commission";
+    default:
+      return "other";
+  }
+}
+
+// shared/finance/groupWalletLedgerByCall.ts
+function resolveSessionCallId(row) {
+  const meta = row.metadata;
+  if (meta && typeof meta === "object") {
+    const sid = String(meta.session_call_id || "").trim();
+    if (sid) return sid;
+  }
+  const minute = Number(row.billingMinute);
+  const callId = String(row.callId || "").trim();
+  if (!callId) return null;
+  if (Number.isFinite(minute) && minute >= 1) return callId;
+  return null;
+}
+function isCompositeEligibleType(entryType) {
+  const t = String(entryType || "");
+  return t === "CALL_DEBIT" || t === "GIFT_DEBIT" || t === "HOST_EARN" || t === "TL_EARN";
+}
+function pickPrimaryEntryType(types) {
+  if (types.has("CALL_DEBIT")) return "CALL_DEBIT";
+  if (types.has("HOST_EARN")) return "HOST_EARN";
+  if (types.has("TL_EARN")) return "TL_EARN";
+  if (types.has("GIFT_DEBIT")) return "GIFT_DEBIT";
+  return [...types][0] || "HOST_EARN";
+}
+function pickCategory(acc) {
+  if (acc.giftCoins > 0 && acc.callCoins <= 0) return "gift";
+  if (acc.callCoins > 0) {
+    if (acc.entryType === "CALL_DEBIT" || acc.entryType === "GIFT_DEBIT") return "platform";
+    if (acc.entryType === "TL_EARN") return "tl_commission";
+    return "call";
+  }
+  if (acc.trueUpCoins > 0) return "true_up";
+  if (acc.rewardCoins > 0) return "reward";
+  if (acc.entryType === "CALL_DEBIT" || acc.entryType === "GIFT_DEBIT") return "platform";
+  if (acc.entryType === "TL_EARN") return "tl_commission";
+  return "other";
+}
+function toStandaloneRow(row) {
+  const minute = row.billingMinute != null && Number.isFinite(Number(row.billingMinute)) ? Number(row.billingMinute) : null;
+  return {
+    id: String(row.id),
+    createdAt: row.createdAt,
+    entryType: String(row.entryType || ""),
+    userId: row.userId ? String(row.userId) : null,
+    userName: row.userName ?? null,
+    teamLeaderId: row.teamLeaderId ?? null,
+    callId: row.callId ? String(row.callId) : null,
+    hostId: row.hostId ? String(row.hostId) : null,
+    hostName: row.hostName ?? null,
+    billingMinute: minute,
+    billedMinutes: minute != null && minute >= 1 ? 1 : null,
+    minuteFrom: minute != null && minute >= 1 ? minute : null,
+    minuteTo: minute != null && minute >= 1 ? minute : null,
+    grouped: false,
+    firstAt: row.createdAt,
+    lastAt: row.createdAt,
+    amountCoins: Number(row.amountCoins) || 0,
+    amountUsd: Number(row.amountUsd) || 0,
+    fxRatio: Number(row.fxRatio) || 0,
+    source: row.source || "wallet",
+    category: row.category || "other",
+    inSalary: row.inSalary !== false,
+    callCoins: Number(row.callCoins) || 0,
+    callUsd: Number(row.callUsd) || 0,
+    giftCoins: Number(row.giftCoins) || 0,
+    giftUsd: Number(row.giftUsd) || 0,
+    trueUpCoins: Number(row.trueUpCoins) || 0,
+    trueUpUsd: Number(row.trueUpUsd) || 0,
+    tierBonusCoins: Number(row.tierBonusCoins) || 0,
+    tierBonusUsd: Number(row.tierBonusUsd) || 0,
+    rewardCoins: Number(row.rewardCoins) || 0,
+    rewardUsd: Number(row.rewardUsd) || 0,
+    hostEarnCoins: Number(row.hostEarnCoins) || 0,
+    hostEarnUsd: Number(row.hostEarnUsd) || 0,
+    tlEarnCoins: Number(row.tlEarnCoins) || 0,
+    tlEarnUsd: Number(row.tlEarnUsd) || 0,
+    platformRetainedCoins: Number(row.platformRetainedCoins) || 0,
+    platformRetainedUsd: Number(row.platformRetainedUsd) || 0
+  };
+}
+function groupWalletLedgerByCall(rows, opts) {
+  const sortDesc = opts?.sortDesc !== false;
+  const groups = /* @__PURE__ */ new Map();
+  const standalone = [];
+  const orderKeys = [];
+  for (const row of rows) {
+    const type = String(row.entryType || "");
+    const sessionCallId = resolveSessionCallId(row);
+    if (!sessionCallId || !isCompositeEligibleType(type)) {
+      standalone.push(toStandaloneRow(row));
+      continue;
+    }
+    const key = `${sessionCallId}|${String(row.userId || "")}`;
+    const minuteRaw = Number(row.billingMinute);
+    const minute = Number.isFinite(minuteRaw) && minuteRaw >= 1 ? Math.floor(minuteRaw) : null;
+    const createdAt = String(row.createdAt || "");
+    const existing = groups.get(key);
+    if (!existing) {
+      orderKeys.push(key);
+      groups.set(key, {
+        callId: sessionCallId,
+        userId: row.userId ? String(row.userId) : null,
+        userName: row.userName ?? null,
+        teamLeaderId: row.teamLeaderId ?? null,
+        hostId: row.hostId ? String(row.hostId) : null,
+        hostName: row.hostName ?? null,
+        entryTypes: /* @__PURE__ */ new Set([type]),
+        inSalary: row.inSalary !== false,
+        fxRatio: Number(row.fxRatio) || 0,
+        source: row.source || "wallet",
+        amountCoins: Number(row.amountCoins) || 0,
+        amountUsd: Number(row.amountUsd) || 0,
+        callCoins: Number(row.callCoins) || 0,
+        callUsd: Number(row.callUsd) || 0,
+        giftCoins: Number(row.giftCoins) || 0,
+        giftUsd: Number(row.giftUsd) || 0,
+        trueUpCoins: Number(row.trueUpCoins) || 0,
+        trueUpUsd: Number(row.trueUpUsd) || 0,
+        tierBonusCoins: Number(row.tierBonusCoins) || 0,
+        tierBonusUsd: Number(row.tierBonusUsd) || 0,
+        rewardCoins: Number(row.rewardCoins) || 0,
+        rewardUsd: Number(row.rewardUsd) || 0,
+        hostEarnCoins: Number(row.hostEarnCoins) || 0,
+        hostEarnUsd: Number(row.hostEarnUsd) || 0,
+        tlEarnCoins: Number(row.tlEarnCoins) || 0,
+        tlEarnUsd: Number(row.tlEarnUsd) || 0,
+        platformRetainedCoins: Number(row.platformRetainedCoins) || 0,
+        platformRetainedUsd: Number(row.platformRetainedUsd) || 0,
+        minutes: minute != null ? /* @__PURE__ */ new Set([minute]) : /* @__PURE__ */ new Set(),
+        minuteFrom: minute,
+        minuteTo: minute,
+        firstAt: createdAt,
+        lastAt: createdAt
+      });
+      continue;
+    }
+    existing.entryTypes.add(type);
+    existing.amountCoins += Number(row.amountCoins) || 0;
+    existing.amountUsd += Number(row.amountUsd) || 0;
+    existing.callCoins += Number(row.callCoins) || 0;
+    existing.callUsd += Number(row.callUsd) || 0;
+    existing.giftCoins += Number(row.giftCoins) || 0;
+    existing.giftUsd += Number(row.giftUsd) || 0;
+    existing.trueUpCoins += Number(row.trueUpCoins) || 0;
+    existing.trueUpUsd += Number(row.trueUpUsd) || 0;
+    existing.tierBonusCoins += Number(row.tierBonusCoins) || 0;
+    existing.tierBonusUsd += Number(row.tierBonusUsd) || 0;
+    existing.rewardCoins += Number(row.rewardCoins) || 0;
+    existing.rewardUsd += Number(row.rewardUsd) || 0;
+    existing.hostEarnCoins += Number(row.hostEarnCoins) || 0;
+    existing.hostEarnUsd += Number(row.hostEarnUsd) || 0;
+    existing.tlEarnCoins += Number(row.tlEarnCoins) || 0;
+    existing.tlEarnUsd += Number(row.tlEarnUsd) || 0;
+    existing.platformRetainedCoins += Number(row.platformRetainedCoins) || 0;
+    existing.platformRetainedUsd += Number(row.platformRetainedUsd) || 0;
+    if (minute != null) {
+      existing.minutes.add(minute);
+      existing.minuteFrom = existing.minuteFrom == null ? minute : Math.min(existing.minuteFrom, minute);
+      existing.minuteTo = existing.minuteTo == null ? minute : Math.max(existing.minuteTo, minute);
+    }
+    if (createdAt && (!existing.firstAt || createdAt < existing.firstAt)) {
+      existing.firstAt = createdAt;
+    }
+    if (createdAt && (!existing.lastAt || createdAt > existing.lastAt)) {
+      existing.lastAt = createdAt;
+    }
+    if (!existing.userName && row.userName) existing.userName = row.userName;
+    if (!existing.hostId && row.hostId) existing.hostId = String(row.hostId);
+    if (!existing.hostName && row.hostName) existing.hostName = row.hostName;
+    if (row.inSalary === false) existing.inSalary = false;
+  }
+  const groupedRows = orderKeys.map((key) => {
+    const g = groups.get(key);
+    const entryType = pickPrimaryEntryType(g.entryTypes);
+    const billedMinutes = g.minutes.size > 0 ? g.minutes.size : null;
+    const category = pickCategory({
+      callCoins: g.callCoins,
+      giftCoins: g.giftCoins,
+      trueUpCoins: g.trueUpCoins,
+      rewardCoins: g.rewardCoins,
+      entryType
+    });
+    return {
+      id: `callgrp:${g.callId}:${g.userId || "none"}`,
+      createdAt: g.lastAt || g.firstAt,
+      entryType,
+      userId: g.userId,
+      userName: g.userName,
+      teamLeaderId: g.teamLeaderId,
+      callId: g.callId,
+      hostId: g.hostId,
+      hostName: g.hostName,
+      billingMinute: null,
+      billedMinutes,
+      minuteFrom: g.minuteFrom,
+      minuteTo: g.minuteTo,
+      grouped: true,
+      firstAt: g.firstAt,
+      lastAt: g.lastAt,
+      amountCoins: g.amountCoins,
+      amountUsd: g.amountUsd,
+      fxRatio: g.fxRatio,
+      source: g.source,
+      category,
+      inSalary: g.inSalary,
+      callCoins: g.callCoins,
+      callUsd: g.callUsd,
+      giftCoins: g.giftCoins,
+      giftUsd: g.giftUsd,
+      trueUpCoins: g.trueUpCoins,
+      trueUpUsd: g.trueUpUsd,
+      tierBonusCoins: g.tierBonusCoins,
+      tierBonusUsd: g.tierBonusUsd,
+      rewardCoins: g.rewardCoins,
+      rewardUsd: g.rewardUsd,
+      hostEarnCoins: g.hostEarnCoins,
+      hostEarnUsd: g.hostEarnUsd,
+      tlEarnCoins: g.tlEarnCoins,
+      tlEarnUsd: g.tlEarnUsd,
+      platformRetainedCoins: g.platformRetainedCoins,
+      platformRetainedUsd: g.platformRetainedUsd
+    };
+  });
+  const merged = [...groupedRows, ...standalone];
+  merged.sort((a, b) => {
+    const ta = String(a.lastAt || a.createdAt || "");
+    const tb = String(b.lastAt || b.createdAt || "");
+    return sortDesc ? tb.localeCompare(ta) : ta.localeCompare(tb);
+  });
+  return merged;
+}
+function groupLiveLedgerRowsByCall(rows, opts) {
+  const groups = /* @__PURE__ */ new Map();
+  const standalone = [];
+  const orderKeys = [];
+  const sortDesc = opts?.sortDesc !== false;
+  for (const row of rows) {
+    const type = String(row.transactionType || "");
+    const sessionCallId = resolveSessionCallId({
+      callId: row.callId,
+      billingMinute: row.billingMinute,
+      metadata: row.metadata
+    });
+    const minute = Number(row.billingMinute);
+    const canGroup = type === "CALL_DEBIT" && Boolean(sessionCallId) && Number.isFinite(minute) && minute >= 1 && !isGiftWalletMetadata(row.metadata);
+    if (!canGroup) {
+      const m = row.billingMinute != null && Number.isFinite(Number(row.billingMinute)) ? Number(row.billingMinute) : null;
+      standalone.push({
+        ...row,
+        billedMinutes: m != null && m >= 1 ? 1 : null,
+        minuteFrom: m != null && m >= 1 ? m : null,
+        minuteTo: m != null && m >= 1 ? m : null,
+        grouped: false,
+        firstAt: row.createdAt,
+        lastAt: row.createdAt
+      });
+      continue;
+    }
+    const key = `${sessionCallId}|${row.userId}`;
+    const min = Math.floor(minute);
+    const createdAt = String(row.createdAt || "");
+    const coins = Number(row.amountCoins) || 0;
+    const existing = groups.get(key);
+    if (!existing) {
+      orderKeys.push(key);
+      groups.set(key, {
+        callId: String(sessionCallId),
+        userId: String(row.userId),
+        userName: row.userName ?? null,
+        userEmail: row.userEmail ?? null,
+        transactionType: type,
+        amountCoins: coins,
+        balanceAfter: Number(row.balanceAfter) || 0,
+        metadata: row.metadata,
+        minutes: /* @__PURE__ */ new Set([min]),
+        minuteFrom: min,
+        minuteTo: min,
+        firstAt: createdAt,
+        lastAt: createdAt
+      });
+      continue;
+    }
+    existing.amountCoins += coins;
+    existing.minutes.add(min);
+    existing.minuteFrom = Math.min(existing.minuteFrom, min);
+    existing.minuteTo = Math.max(existing.minuteTo, min);
+    if (createdAt && (!existing.firstAt || createdAt < existing.firstAt)) {
+      existing.firstAt = createdAt;
+    }
+    if (createdAt && (!existing.lastAt || createdAt > existing.lastAt)) {
+      existing.lastAt = createdAt;
+      existing.balanceAfter = Number(row.balanceAfter) || existing.balanceAfter;
+      existing.metadata = row.metadata ?? existing.metadata;
+    }
+    if (!existing.userName && row.userName) existing.userName = row.userName;
+    if (!existing.userEmail && row.userEmail) existing.userEmail = row.userEmail;
+  }
+  const groupedRows = orderKeys.map((key) => {
+    const g = groups.get(key);
+    return {
+      id: `callgrp:call_debit:${g.callId}:${g.userId}`,
+      userId: g.userId,
+      userName: g.userName,
+      userEmail: g.userEmail,
+      callId: g.callId,
+      transactionType: g.transactionType,
+      amountCoins: g.amountCoins,
+      balanceAfter: g.balanceAfter,
+      billingMinute: g.minuteTo,
+      metadata: g.metadata,
+      createdAt: g.lastAt || g.firstAt,
+      billedMinutes: g.minutes.size,
+      minuteFrom: g.minuteFrom,
+      minuteTo: g.minuteTo,
+      grouped: true,
+      firstAt: g.firstAt,
+      lastAt: g.lastAt
+    };
+  });
+  const merged = [...groupedRows, ...standalone];
+  merged.sort((a, b) => {
+    const ta = String(a.lastAt || a.createdAt || "");
+    const tb = String(b.lastAt || b.createdAt || "");
+    return sortDesc ? tb.localeCompare(ta) : ta.localeCompare(tb);
+  });
+  return merged;
+}
+
+// server/finance/earningsOverview.ts
+var HOST_FIN_TYPES = [...HOST_SALARY_FINANCIAL_ENTRY_TYPES];
+var TL_FIN_TYPES = ["TL_EARN"];
+var PLATFORM_FIN_TYPES = ["PLATFORM_EARN"];
+var HOST_WALLET_TYPES = [
+  ...HOST_SALARY_WALLET_TYPES,
+  ...NON_SALARY_REWARD_WALLET_TYPES
+];
+var TL_WALLET_TYPES = ["TL_EARN"];
+var PLATFORM_WALLET_TYPES = ["CALL_DEBIT", "GIFT_DEBIT"];
+function emptyComponentSplit() {
+  return {
+    callCoins: 0,
+    callUsd: 0,
+    giftCoins: 0,
+    giftUsd: 0,
+    trueUpCoins: 0,
+    trueUpUsd: 0,
+    tierBonusCoins: 0,
+    tierBonusUsd: 0,
+    rewardCoins: 0,
+    rewardUsd: 0,
+    salaryCoins: 0,
+    salaryUsd: 0,
+    totalCoins: 0,
+    totalUsd: 0
+  };
+}
+function finalizeSplit(s) {
+  s.salaryCoins = s.callCoins + s.giftCoins + s.trueUpCoins + s.tierBonusCoins;
+  s.salaryUsd = s.callUsd + s.giftUsd + s.trueUpUsd + s.tierBonusUsd;
+  s.totalCoins = s.salaryCoins + s.rewardCoins;
+  s.totalUsd = s.salaryUsd + s.rewardUsd;
+  return s;
+}
+function emptyLedgerAmounts() {
+  return {
+    callCoins: 0,
+    callUsd: 0,
+    giftCoins: 0,
+    giftUsd: 0,
+    trueUpCoins: 0,
+    trueUpUsd: 0,
+    tierBonusCoins: 0,
+    tierBonusUsd: 0,
+    rewardCoins: 0,
+    rewardUsd: 0,
+    hostEarnCoins: 0,
+    hostEarnUsd: 0,
+    tlEarnCoins: 0,
+    tlEarnUsd: 0,
+    platformRetainedCoins: 0,
+    platformRetainedUsd: 0
+  };
+}
+function hostIdFromWalletMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object") return null;
+  const m = metadata;
+  const raw = m.receiverId ?? m.receiver_id ?? m.hostId ?? m.host_id;
+  const id = String(raw || "").trim();
+  return id || null;
+}
+function mapWalletRowToLedger(row, peg) {
+  const coins = Math.abs(Number(row.amount) || 0);
+  const usd = coinsToUsd(coins, peg);
+  const type = String(row.transaction_type || "");
+  const amounts = emptyLedgerAmounts();
+  let category = "other";
+  let inSalary = true;
+  const billingRaw = Number(row.billing_minute);
+  const billingMinute = Number.isFinite(billingRaw) && billingRaw > 0 ? Math.floor(billingRaw) : null;
+  const hostId = type === "TL_EARN" ? hostIdFromWalletMetadata(row.metadata) : null;
+  if (type === "HOST_EARN") {
+    if (isGiftWalletMetadata(row.metadata)) {
+      category = "gift";
+      amounts.giftCoins = coins;
+      amounts.giftUsd = usd;
+    } else {
+      category = "call";
+      amounts.callCoins = coins;
+      amounts.callUsd = usd;
+    }
+  } else if (type === "TARGET_SHARE_TRUEUP") {
+    category = "true_up";
+    amounts.trueUpCoins = coins;
+    amounts.trueUpUsd = usd;
+  } else if (type === "TL_EARN") {
+    if (isGiftWalletMetadata(row.metadata)) {
+      category = "gift";
+      amounts.giftCoins = coins;
+      amounts.giftUsd = usd;
+    } else {
+      category = "tl_commission";
+      amounts.callCoins = coins;
+      amounts.callUsd = usd;
+    }
+  } else if (type === "REWARD_STREAK" || type === "REWARD_MISSION" || type === "REWARD_MASTER_CHEST") {
+    category = "reward";
+    inSalary = false;
+    amounts.rewardCoins = coins;
+    amounts.rewardUsd = usd;
+  } else if (type === "CALL_DEBIT") {
+    category = "platform";
+    amounts.callCoins = coins;
+    amounts.callUsd = usd;
+  } else if (type === "GIFT_DEBIT") {
+    category = "platform";
+    amounts.giftCoins = coins;
+    amounts.giftUsd = usd;
+  }
+  return {
+    id: String(row.id),
+    createdAt: row.created_at,
+    entryType: type,
+    userId: row.user_id ? String(row.user_id) : null,
+    userName: null,
+    teamLeaderId: null,
+    callId: row.call_id ? String(row.call_id) : null,
+    hostId,
+    hostName: null,
+    billingMinute,
+    billedMinutes: billingMinute != null ? 1 : null,
+    minuteFrom: billingMinute,
+    minuteTo: billingMinute,
+    grouped: false,
+    firstAt: row.created_at,
+    lastAt: row.created_at,
+    amountCoins: coins,
+    amountUsd: usd,
+    fxRatio: peg,
+    source: "wallet",
+    category,
+    inSalary,
+    ...amounts
+  };
+}
+function mapFinancialRowToLedger(row) {
+  const coins = Number(row.amount_coins) || 0;
+  const usd = Number(row.amount_usd) || 0;
+  const type = String(row.entry_type || "");
+  const amounts = emptyLedgerAmounts();
+  let category = "other";
+  const inSalary = true;
+  const meta = row.metadata || {};
+  if (type === "TARGET_SHARE_TRUEUP") {
+    category = "true_up";
+    amounts.trueUpCoins = coins;
+    amounts.trueUpUsd = usd;
+  } else if (type === "TARGET_BONUS") {
+    category = "tier_bonus";
+    amounts.tierBonusCoins = coins;
+    amounts.tierBonusUsd = usd;
+  } else if (type === "TL_EARN") {
+    category = "tl_commission";
+    amounts.callCoins = coins;
+    amounts.callUsd = usd;
+  } else if (type === "PLATFORM_EARN") {
+    category = "platform";
+    amounts.callCoins = coins;
+    amounts.callUsd = usd;
+    amounts.platformRetainedCoins = coins;
+    amounts.platformRetainedUsd = usd;
+  } else if (type === "HOST_EARN") {
+    const call = Number(meta.call);
+    const gift = Number(meta.gift);
+    if (Number.isFinite(call) || Number.isFinite(gift)) {
+      const callC = Math.max(0, Math.round(Number.isFinite(call) ? call : 0));
+      const giftC = Math.max(0, Math.round(Number.isFinite(gift) ? gift : 0));
+      const sum = callC + giftC;
+      amounts.callCoins = callC;
+      amounts.giftCoins = giftC;
+      amounts.callUsd = sum > 0 ? usd * (callC / sum) : usd;
+      amounts.giftUsd = sum > 0 ? usd * (giftC / sum) : 0;
+      category = giftC > callC ? "gift" : "call";
+    } else {
+      category = "call";
+      amounts.callCoins = coins;
+      amounts.callUsd = usd;
+    }
+  }
+  return {
+    id: String(row.id),
+    createdAt: row.created_at,
+    entryType: type,
+    userId: row.user_id ? String(row.user_id) : null,
+    userName: null,
+    teamLeaderId: row.team_leader_id ? String(row.team_leader_id) : null,
+    callId: null,
+    hostId: null,
+    hostName: null,
+    billingMinute: null,
+    billedMinutes: null,
+    minuteFrom: null,
+    minuteTo: null,
+    grouped: false,
+    firstAt: row.created_at,
+    lastAt: row.created_at,
+    amountCoins: coins,
+    amountUsd: usd,
+    fxRatio: Number(row.fx_ratio) || 0,
+    source: "financial",
+    category,
+    inSalary,
+    ...amounts
+  };
+}
+async function loadProfileNames(client, ids) {
+  const nameById = /* @__PURE__ */ new Map();
+  const unique = Array.from(new Set(ids.filter(Boolean)));
+  const chunk = 200;
+  for (let i = 0; i < unique.length; i += chunk) {
+    const slice = unique.slice(i, i + chunk);
+    const { data, error } = await client.from("profiles").select("id, name").in("id", slice);
+    if (error) throw new Error(error.message);
+    for (const p of data || []) {
+      const id = String(p.id || "");
+      const name = String(p.name || "").trim();
+      if (id && name) nameById.set(id, name);
+    }
+  }
+  return nameById;
+}
+async function hydrateHostIdsFromCallLogs(client, rows) {
+  const needCallIds = Array.from(
+    new Set(
+      rows.filter((r) => r.entryType === "TL_EARN" && !r.hostId && r.callId).map((r) => String(r.callId))
+    )
+  );
+  if (!needCallIds.length) return rows;
+  const hostByCall = /* @__PURE__ */ new Map();
+  const chunk = 100;
+  for (let i = 0; i < needCallIds.length; i += chunk) {
+    const slice = needCallIds.slice(i, i + chunk);
+    const { data, error } = await client.from("call_logs").select("id, host_id, receiver_id, host_name").in("id", slice);
+    if (error) throw new Error(error.message);
+    for (const c of data || []) {
+      const callId = String(c.id || "");
+      const hostId = String(c.host_id || c.receiver_id || "").trim();
+      if (callId && hostId) hostByCall.set(callId, hostId);
+    }
+  }
+  return rows.map((r) => {
+    if (r.hostId || r.entryType !== "TL_EARN" || !r.callId) return r;
+    const hostId = hostByCall.get(String(r.callId)) || null;
+    return hostId ? { ...r, hostId } : r;
+  });
+}
+async function hydrateLedgerUserNames(client, rows) {
+  const withHosts = await hydrateHostIdsFromCallLogs(client, rows);
+  const userIds = withHosts.map((r) => r.userId).filter((id) => Boolean(id));
+  const hostIds = withHosts.map((r) => r.hostId).filter((id) => Boolean(id));
+  const nameById = await loadProfileNames(client, [...userIds, ...hostIds]);
+  return withHosts.map((r) => ({
+    ...r,
+    userName: r.userId ? nameById.get(r.userId) || r.userName || null : null,
+    hostName: r.hostId ? nameById.get(r.hostId) || r.hostName || null : r.hostName || null
+  }));
+}
+function addRowToSplit(split, row) {
+  split.callCoins += row.callCoins;
+  split.callUsd += row.callUsd;
+  split.giftCoins += row.giftCoins;
+  split.giftUsd += row.giftUsd;
+  split.trueUpCoins += row.trueUpCoins;
+  split.trueUpUsd += row.trueUpUsd;
+  split.tierBonusCoins += row.tierBonusCoins;
+  split.tierBonusUsd += row.tierBonusUsd;
+  split.rewardCoins += row.rewardCoins;
+  split.rewardUsd += row.rewardUsd;
+}
+function isAdminRole(role) {
+  return role === "admin";
+}
+function isTeamLeaderRole(role) {
+  return role === "team_leader" || role === "agency_manager" || role === "admin";
+}
+function calendarWeekBounds(at = /* @__PURE__ */ new Date()) {
+  const start = startOfUtcWeekMonday(at);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 7);
+  return { start, end };
+}
+function calendarMonthBounds(at = /* @__PURE__ */ new Date()) {
+  const start = startOfUtcMonth(at);
+  const end = addUtcMonths(start, 1);
+  return { start, end };
+}
+function dayKey(d) {
+  return d.toISOString().slice(0, 10);
+}
+function weekKey(d) {
+  return `w:${dayKey(startOfUtcWeekMonday(d))}`;
+}
+function monthKey(d) {
+  const m = startOfUtcMonth(d);
+  return `m:${m.getUTCFullYear()}-${String(m.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+function parsePeriodKey(periodKey, groupBy) {
+  const raw = String(periodKey || "").trim();
+  if (!raw) return null;
+  if (groupBy === "week" || raw.startsWith("w:")) {
+    const iso2 = raw.startsWith("w:") ? raw.slice(2) : raw;
+    const start2 = startOfUtcWeekMonday(/* @__PURE__ */ new Date(`${iso2}T00:00:00.000Z`));
+    if (Number.isNaN(start2.getTime())) return null;
+    const end = new Date(start2);
+    end.setUTCDate(end.getUTCDate() + 7);
+    return { start: start2, end };
+  }
+  const iso = raw.startsWith("m:") ? raw.slice(2) + "-01" : raw;
+  const start = startOfUtcMonth(/* @__PURE__ */ new Date(`${iso}T00:00:00.000Z`));
+  if (Number.isNaN(start.getTime())) return null;
+  return { start, end: addUtcMonths(start, 1) };
+}
+function groupLabel(groupBy, start, end) {
+  if (groupBy === "week") {
+    return `Week ${dayKey(start)} \u2192 ${dayKey(new Date(end.getTime() - 1))}`;
+  }
+  return start.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+}
+function emptyKpi(start, end) {
+  return {
+    coins: 0,
+    usd: 0,
+    entryCount: 0,
+    periodStart: toIso(start),
+    periodEnd: toIso(end)
+  };
+}
+function scopeCoinsFromAccrual(scope, totals) {
+  if (scope === "platform") return Math.max(0, totals.platformRetainedCoins);
+  if (scope === "tl") return Math.max(0, totals.tlEarnCoins);
+  return Math.max(0, totals.hostEarnCoins + totals.targetShareTrueUpCoins);
+}
+function finEntryTypes(scope) {
+  if (scope === "platform") return [...PLATFORM_FIN_TYPES];
+  if (scope === "tl") return [...TL_FIN_TYPES];
+  return [...HOST_FIN_TYPES];
+}
+function walletEntryTypes(scope) {
+  if (scope === "platform") return [...PLATFORM_WALLET_TYPES];
+  if (scope === "tl") return [...TL_WALLET_TYPES];
+  return [...HOST_WALLET_TYPES];
+}
+async function listManagedHostIds(client, teamLeaderId) {
+  const { data, error } = await client.from("profiles").select("id").or(`team_leader_id.eq.${teamLeaderId},created_by_id.eq.${teamLeaderId}`);
+  if (error) throw new Error(error.message);
+  return (data || []).map((r) => String(r.id)).filter(Boolean);
+}
+async function resolveEarningsScopeAccess(input, client) {
+  const scope = input.scope;
+  const actorId = String(input.actorId || "").trim();
+  const role = String(input.actorRole || "").trim();
+  if (!actorId) {
+    return { ok: false, status: 401, message: "Unauthorized", code: "UNAUTHORIZED" };
+  }
+  if (scope !== "platform" && scope !== "tl" && scope !== "host") {
+    return { ok: false, status: 400, message: "Invalid scope", code: "INVALID_SCOPE" };
+  }
+  const db = client ?? (isSupabaseAdminConfigured() ? getSupabaseAdmin() : null);
+  if (!db) {
+    return { ok: false, status: 503, message: "Finance backend unavailable", code: "NO_ADMIN" };
+  }
+  if (scope === "platform") {
+    if (!isAdminRole(role)) {
+      return { ok: false, status: 403, message: "Platform earnings are admin-only", code: "FORBIDDEN" };
+    }
+    return { ok: true, scope, userIds: null, teamLeaderId: null };
+  }
+  if (scope === "tl") {
+    if (isAdminRole(role)) {
+      const tlFilter = String(input.teamLeaderId || "").trim();
+      if (tlFilter) {
+        return { ok: true, scope, userIds: [tlFilter], teamLeaderId: tlFilter };
+      }
+      return { ok: true, scope, userIds: null, teamLeaderId: null };
+    }
+    if (!isTeamLeaderRole(role)) {
+      return { ok: false, status: 403, message: "Team leader earnings forbidden", code: "FORBIDDEN" };
+    }
+    return { ok: true, scope, userIds: [actorId], teamLeaderId: actorId };
+  }
+  if (isAdminRole(role)) {
+    const hostId = String(input.userId || "").trim();
+    const tlFilter = String(input.teamLeaderId || "").trim();
+    if (hostId) {
+      return { ok: true, scope, userIds: [hostId], teamLeaderId: tlFilter || null };
+    }
+    if (tlFilter) {
+      const ids = await listManagedHostIds(db, tlFilter);
+      return { ok: true, scope, userIds: ids.length ? ids : [], teamLeaderId: tlFilter };
+    }
+    return { ok: true, scope, userIds: null, teamLeaderId: null };
+  }
+  if (isTeamLeaderRole(role) && role !== "admin") {
+    const managed = await listManagedHostIds(db, actorId);
+    const hostId = String(input.userId || "").trim();
+    if (hostId) {
+      if (!managed.includes(hostId)) {
+        return {
+          ok: false,
+          status: 403,
+          message: "Host is not managed by this team leader",
+          code: "FORBIDDEN"
+        };
+      }
+      return { ok: true, scope, userIds: [hostId], teamLeaderId: actorId };
+    }
+    return {
+      ok: true,
+      scope,
+      userIds: managed.length ? managed : [],
+      teamLeaderId: actorId
+    };
+  }
+  return { ok: true, scope, userIds: [actorId], teamLeaderId: null };
+}
+async function sumFinancialLedger(client, opts) {
+  const types = finEntryTypes(opts.scope);
+  let coins = 0;
+  let usd = 0;
+  let entryCount = 0;
+  const pageSize = 1e3;
+  let offset = 0;
+  for (; ; ) {
+    let q = client.from("financial_ledger").select("amount_coins, amount_usd, user_id, team_leader_id, entry_type, created_at").in("entry_type", types).order("created_at", { ascending: true }).range(offset, offset + pageSize - 1);
+    if (opts.periodStart) q = q.gte("created_at", toIso(opts.periodStart));
+    if (opts.periodEnd) q = q.lt("created_at", toIso(opts.periodEnd));
+    if (opts.scope === "tl" && opts.userIds && opts.userIds.length === 1) {
+      q = q.or(
+        `user_id.eq.${opts.userIds[0]},team_leader_id.eq.${opts.userIds[0]}`
+      );
+    } else if (opts.userIds) {
+      if (opts.userIds.length === 0) {
+        return { coins: 0, usd: 0, entryCount: 0 };
+      }
+      q = q.in("user_id", opts.userIds);
+    }
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    const rows = data || [];
+    for (const row of rows) {
+      coins += Number(row.amount_coins) || 0;
+      usd += Number(row.amount_usd) || 0;
+      entryCount += 1;
+    }
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  return { coins, usd, entryCount };
+}
+async function buildDailySeriesFromWallet(client, opts) {
+  const types = walletEntryTypes(opts.scope);
+  const byDay = /* @__PURE__ */ new Map();
+  for (let t = opts.start.getTime(); t < opts.end.getTime(); t += 864e5) {
+    const key = dayKey(new Date(t));
+    byDay.set(key, { coins: 0, count: 0 });
+  }
+  let entryCount = 0;
+  const pageSize = 1e3;
+  let offset = 0;
+  if (opts.scope === "platform") {
+    for (let t = opts.start.getTime(); t < Math.min(opts.end.getTime(), Date.now() + 864e5); t += 864e5) {
+      const dayStart = startOfUtcDay(new Date(t));
+      const dayEnd = new Date(dayStart);
+      dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+      if (dayStart.getTime() >= opts.end.getTime()) break;
+      const endBound = dayEnd.getTime() > opts.end.getTime() ? opts.end : dayEnd;
+      const accrual = await aggregateWalletLedgerEarnings({
+        periodStart: dayStart,
+        periodEnd: endBound,
+        client
+      });
+      const coins = accrual.success ? scopeCoinsFromAccrual("platform", accrual.totals) : 0;
+      const key = dayKey(dayStart);
+      byDay.set(key, { coins, count: coins > 0 ? 1 : 0 });
+      if (coins > 0) entryCount += 1;
+    }
+  } else {
+    if (opts.userIds && opts.userIds.length === 0) {
+      return {
+        series: [...byDay.entries()].map(([date, v]) => ({
+          date,
+          label: date.slice(5),
+          coins: v.coins,
+          usd: coinsToUsd(v.coins, opts.peg)
+        })),
+        entryCount: 0
+      };
+    }
+    for (; ; ) {
+      let q = client.from("wallet_ledger").select("amount, transaction_type, created_at, user_id").in("transaction_type", types).gte("created_at", toIso(opts.start)).lt("created_at", toIso(opts.end)).order("created_at", { ascending: true }).range(offset, offset + pageSize - 1);
+      if (opts.userIds) q = q.in("user_id", opts.userIds);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      const rows = data || [];
+      for (const row of rows) {
+        const amount = Number(row.amount) || 0;
+        if (amount === 0) continue;
+        const coins = Math.abs(amount);
+        const created = new Date(row.created_at);
+        const key = dayKey(created);
+        const prev = byDay.get(key) || { coins: 0, count: 0 };
+        prev.coins += coins;
+        prev.count += 1;
+        byDay.set(key, prev);
+        entryCount += 1;
+      }
+      if (rows.length < pageSize) break;
+      offset += pageSize;
+    }
+  }
+  const series = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, v]) => ({
+    date,
+    label: date.slice(5),
+    coins: v.coins,
+    usd: coinsToUsd(v.coins, opts.peg)
+  }));
+  return { series, entryCount };
+}
+async function loadWalletLedgerRows(client, opts) {
+  if (opts.userIds && opts.userIds.length === 0) return [];
+  const types = opts.scope === "platform" ? [...PLATFORM_WALLET_TYPES] : walletEntryTypes(opts.scope);
+  const raw = [];
+  const pageSize = 1e3;
+  let offset = 0;
+  const maxRaw = Math.min(Math.max(opts.limit * 40, 500), 1e4);
+  while (raw.length < maxRaw) {
+    let q = client.from("wallet_ledger").select(
+      "id, user_id, transaction_type, amount, created_at, metadata, call_id, billing_minute"
+    ).in("transaction_type", types).gte("created_at", toIso(opts.start)).lt("created_at", toIso(opts.end)).order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+    if (opts.userIds) q = q.in("user_id", opts.userIds);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    const rows = data || [];
+    for (const row of rows) {
+      const amount = Number(row.amount) || 0;
+      if (amount === 0) continue;
+      const mapped = mapWalletRowToLedger(row, opts.peg);
+      raw.push({ ...mapped, metadata: row.metadata });
+    }
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+    if (groupWalletLedgerByCall(raw).length >= opts.limit) break;
+  }
+  let grouped = groupWalletLedgerByCall(raw).slice(0, opts.limit);
+  if (opts.scope === "platform") {
+    grouped = await hydratePlatformCallEconomics(client, grouped, opts.peg, opts.start, opts.end);
+  }
+  return hydrateLedgerUserNames(client, grouped);
+}
+async function hydratePlatformCallEconomics(client, rows, peg, start, end) {
+  const callIds = Array.from(
+    new Set(rows.map((r) => String(r.callId || "").trim()).filter(Boolean))
+  );
+  if (!callIds.length) {
+    return rows.map((r) => ({
+      ...r,
+      hostEarnCoins: 0,
+      hostEarnUsd: 0,
+      tlEarnCoins: 0,
+      tlEarnUsd: 0,
+      platformRetainedCoins: Math.max(0, Number(r.amountCoins) || 0),
+      platformRetainedUsd: coinsToUsd(Math.max(0, Number(r.amountCoins) || 0), peg)
+    }));
+  }
+  const callIdSet = new Set(callIds);
+  const byCall = /* @__PURE__ */ new Map();
+  const pageSize = 1e3;
+  let offset = 0;
+  for (; ; ) {
+    const { data, error } = await client.from("wallet_ledger").select("call_id, transaction_type, amount, billing_minute, metadata").in("transaction_type", ["HOST_EARN", "TL_EARN"]).gte("created_at", toIso(start)).lt("created_at", toIso(end)).order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+    if (error) throw new Error(error.message);
+    const page = data || [];
+    for (const row of page) {
+      const sessionId = resolveSessionCallId({
+        callId: row.call_id,
+        billingMinute: row.billing_minute,
+        metadata: row.metadata
+      });
+      if (!sessionId || !callIdSet.has(sessionId)) continue;
+      const coins = Math.abs(Number(row.amount) || 0);
+      if (coins === 0) continue;
+      const prev = byCall.get(sessionId) || { host: 0, tl: 0 };
+      if (String(row.transaction_type) === "HOST_EARN") prev.host += coins;
+      else if (String(row.transaction_type) === "TL_EARN") prev.tl += coins;
+      byCall.set(sessionId, prev);
+    }
+    if (page.length < pageSize) break;
+    offset += pageSize;
+    if (offset >= 2e4) break;
+  }
+  return rows.map((r) => {
+    const callId = String(r.callId || "").trim();
+    const split = callId ? byCall.get(callId) : null;
+    const host = split?.host || 0;
+    const tl = split?.tl || 0;
+    const burn = Math.max(0, Number(r.amountCoins) || 0);
+    const platform = Math.max(0, burn - host - tl);
+    return {
+      ...r,
+      hostEarnCoins: host,
+      hostEarnUsd: coinsToUsd(host, peg),
+      tlEarnCoins: tl,
+      tlEarnUsd: coinsToUsd(tl, peg),
+      platformRetainedCoins: platform,
+      platformRetainedUsd: coinsToUsd(platform, peg)
+    };
+  });
+}
+async function loadFinancialLedgerRows(client, opts) {
+  if (opts.userIds && opts.userIds.length === 0) return [];
+  const types = finEntryTypes(opts.scope);
+  const out = [];
+  const pageSize = Math.min(opts.limit, 1e3);
+  let offset = 0;
+  while (out.length < opts.limit) {
+    let q = client.from("financial_ledger").select(
+      "id, created_at, entry_type, user_id, team_leader_id, amount_coins, amount_usd, fx_ratio, metadata"
+    ).in("entry_type", types).gte("created_at", toIso(opts.start)).lt("created_at", toIso(opts.end)).order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+    if (opts.scope === "tl" && opts.userIds && opts.userIds.length === 1) {
+      q = q.or(`user_id.eq.${opts.userIds[0]},team_leader_id.eq.${opts.userIds[0]}`);
+    } else if (opts.userIds) {
+      q = q.in("user_id", opts.userIds);
+    }
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    const rows = data || [];
+    for (const row of rows) {
+      out.push(mapFinancialRowToLedger(row));
+      if (out.length >= opts.limit) break;
+    }
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  return hydrateLedgerUserNames(client, out);
+}
+async function computeComponentSplit(client, opts) {
+  const split = emptyComponentSplit();
+  if (opts.scope !== "host" && opts.scope !== "tl") {
+    const accrual = await aggregateWalletLedgerEarnings({
+      periodStart: opts.start,
+      periodEnd: opts.end,
+      client
+    });
+    if (accrual.success) {
+      const coins = scopeCoinsFromAccrual(opts.scope, accrual.totals);
+      split.callCoins = coins;
+      split.callUsd = coinsToUsd(coins, opts.peg);
+    }
+    return finalizeSplit(split);
+  }
+  if (opts.userIds && opts.userIds.length === 0) return finalizeSplit(split);
+  const types = opts.scope === "tl" ? [...TL_WALLET_TYPES] : [...HOST_WALLET_TYPES];
+  const pageSize = 1e3;
+  let offset = 0;
+  for (; ; ) {
+    let q = client.from("wallet_ledger").select("id, user_id, transaction_type, amount, created_at, metadata").in("transaction_type", types).gte("created_at", toIso(opts.start)).lt("created_at", toIso(opts.end)).order("created_at", { ascending: true }).range(offset, offset + pageSize - 1);
+    if (opts.userIds) q = q.in("user_id", opts.userIds);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    const rows = data || [];
+    for (const row of rows) {
+      if (!(Number(row.amount) || 0)) continue;
+      addRowToSplit(split, mapWalletRowToLedger(row, opts.peg));
+    }
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  if (opts.includeClosedBonus && opts.scope === "host") {
+    let offsetFin = 0;
+    for (; ; ) {
+      let q = client.from("financial_ledger").select(
+        "id, created_at, entry_type, user_id, team_leader_id, amount_coins, amount_usd, fx_ratio, metadata"
+      ).eq("entry_type", "TARGET_BONUS").gte("created_at", toIso(opts.start)).lt("created_at", toIso(opts.end)).order("created_at", { ascending: true }).range(offsetFin, offsetFin + pageSize - 1);
+      if (opts.userIds) q = q.in("user_id", opts.userIds);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      const rows = data || [];
+      for (const row of rows) {
+        addRowToSplit(split, mapFinancialRowToLedger(row));
+      }
+      if (rows.length < pageSize) break;
+      offsetFin += pageSize;
+    }
+  }
+  return finalizeSplit(split);
+}
+async function loadLifetimeGroups(client, opts) {
+  if (opts.userIds && opts.userIds.length === 0) return [];
+  const types = finEntryTypes(opts.scope);
+  const groups = /* @__PURE__ */ new Map();
+  const pageSize = 1e3;
+  let offset = 0;
+  for (; ; ) {
+    let q = client.from("financial_ledger").select("amount_coins, amount_usd, created_at, user_id, team_leader_id, entry_type").in("entry_type", types).order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+    if (opts.scope === "tl" && opts.userIds && opts.userIds.length === 1) {
+      q = q.or(`user_id.eq.${opts.userIds[0]},team_leader_id.eq.${opts.userIds[0]}`);
+    } else if (opts.userIds) {
+      q = q.in("user_id", opts.userIds);
+    }
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    const rows = data || [];
+    for (const row of rows) {
+      const created = new Date(row.created_at);
+      if (Number.isNaN(created.getTime())) continue;
+      const key = opts.groupBy === "week" ? weekKey(created) : monthKey(created);
+      let start;
+      let end;
+      if (opts.groupBy === "week") {
+        start = startOfUtcWeekMonday(created);
+        end = new Date(start);
+        end.setUTCDate(end.getUTCDate() + 7);
+      } else {
+        start = startOfUtcMonth(created);
+        end = addUtcMonths(start, 1);
+      }
+      const prev = groups.get(key) || {
+        start,
+        end,
+        coins: 0,
+        usd: 0,
+        entryCount: 0
+      };
+      prev.coins += Number(row.amount_coins) || 0;
+      prev.usd += Number(row.amount_usd) || 0;
+      prev.entryCount += 1;
+      groups.set(key, prev);
+    }
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  const now = /* @__PURE__ */ new Date();
+  const currentBounds = opts.groupBy === "week" ? calendarWeekBounds(now) : calendarMonthBounds(now);
+  const currentKey = opts.groupBy === "week" ? weekKey(now) : monthKey(now);
+  if (!groups.has(currentKey)) {
+    const accrual = await aggregateWalletLedgerEarnings({
+      periodStart: currentBounds.start,
+      periodEnd: now < currentBounds.end ? now : currentBounds.end,
+      userIds: opts.scope === "platform" ? void 0 : opts.userIds === null ? void 0 : opts.userIds,
+      client
+    });
+    const coins = accrual.success ? scopeCoinsFromAccrual(opts.scope, accrual.totals) : 0;
+    if (coins > 0) {
+      groups.set(currentKey, {
+        start: currentBounds.start,
+        end: currentBounds.end,
+        coins,
+        usd: coinsToUsd(coins, opts.peg),
+        entryCount: 0
+      });
+    }
+  }
+  return [...groups.entries()].map(([periodKey, g]) => ({
+    periodKey,
+    label: groupLabel(opts.groupBy, g.start, g.end),
+    periodStart: toIso(g.start),
+    periodEnd: toIso(g.end),
+    totalCoins: g.coins,
+    totalUsd: g.usd,
+    entryCount: g.entryCount
+  })).sort((a, b) => b.periodStart.localeCompare(a.periodStart)).slice(0, opts.limit);
+}
+async function buildEarningsOverview(opts) {
+  const client = opts.client ?? getSupabaseAdmin();
+  if (!client) throw new Error("Supabase admin client unavailable");
+  const at = opts.at ?? /* @__PURE__ */ new Date();
+  const config = opts.config ?? await loadFinanceSystemConfig();
+  const peg = getCoinUsdPeg(config);
+  const week = calendarWeekBounds(at);
+  const month = calendarMonthBounds(at);
+  const weekEndLive = at < week.end ? at : week.end;
+  const monthEndLive = at < month.end ? at : month.end;
+  const userIdsForAccrual = opts.scope === "platform" ? void 0 : opts.userIds === null ? void 0 : opts.userIds;
+  const [weekAccrual, monthAccrual, lifetimeFin, weekSeriesPack, monthSeriesPack] = await Promise.all([
+    aggregateWalletLedgerEarnings({
+      periodStart: week.start,
+      periodEnd: weekEndLive,
+      userIds: userIdsForAccrual,
+      client
+    }),
+    aggregateWalletLedgerEarnings({
+      periodStart: month.start,
+      periodEnd: monthEndLive,
+      userIds: userIdsForAccrual,
+      client
+    }),
+    sumFinancialLedger(client, {
+      scope: opts.scope,
+      userIds: opts.userIds,
+      teamLeaderId: opts.teamLeaderId
+    }),
+    buildDailySeriesFromWallet(client, {
+      scope: opts.scope,
+      userIds: opts.userIds,
+      start: week.start,
+      end: week.end,
+      peg
+    }),
+    buildDailySeriesFromWallet(client, {
+      scope: opts.scope,
+      userIds: opts.userIds,
+      start: month.start,
+      end: month.end,
+      peg
+    })
+  ]);
+  const weekCoins = weekAccrual.success ? scopeCoinsFromAccrual(opts.scope, weekAccrual.totals) : 0;
+  const monthCoins = monthAccrual.success ? scopeCoinsFromAccrual(opts.scope, monthAccrual.totals) : 0;
+  const settlementBounds = getCurrentPeriodBounds(config.creatorTargetCycle, at);
+  const openAccrual = await aggregateWalletLedgerEarnings({
+    periodStart: settlementBounds.periodStart,
+    periodEnd: at < settlementBounds.periodEnd ? at : settlementBounds.periodEnd,
+    userIds: userIdsForAccrual,
+    client
+  });
+  const openCoins = openAccrual.success ? scopeCoinsFromAccrual(opts.scope, openAccrual.totals) : 0;
+  const lifetimeCoins = lifetimeFin.coins + openCoins;
+  const lifetimeUsd = lifetimeFin.usd + coinsToUsd(openCoins, peg);
+  const ensured = await ensureOpenPeriod({ at, config });
+  const nextCloseAtDate = await getNextCloseAt2({ at, config });
+  const remainingMs = Math.max(0, nextCloseAtDate.getTime() - at.getTime());
+  const totalMs = Math.max(
+    1,
+    nextCloseAtDate.getTime() - settlementBounds.periodStart.getTime()
+  );
+  const daysElapsedWeek = Math.max(
+    1,
+    Math.ceil((weekEndLive.getTime() - week.start.getTime()) / 864e5)
+  );
+  const weekKpi = {
+    ...emptyKpi(week.start, week.end),
+    coins: weekCoins,
+    usd: coinsToUsd(weekCoins, peg),
+    entryCount: weekSeriesPack.entryCount
+  };
+  const monthKpi = {
+    ...emptyKpi(month.start, month.end),
+    coins: monthCoins,
+    usd: coinsToUsd(monthCoins, peg),
+    entryCount: monthSeriesPack.entryCount
+  };
+  const [weekSplit, monthSplit, lifetimeSplit] = await Promise.all([
+    computeComponentSplit(client, {
+      scope: opts.scope,
+      userIds: opts.userIds,
+      start: week.start,
+      end: weekEndLive,
+      peg,
+      includeClosedBonus: true
+    }),
+    computeComponentSplit(client, {
+      scope: opts.scope,
+      userIds: opts.userIds,
+      start: month.start,
+      end: monthEndLive,
+      peg,
+      includeClosedBonus: true
+    }),
+    (async () => {
+      const split = emptyComponentSplit();
+      const pageSize = 1e3;
+      let offset = 0;
+      const types = finEntryTypes(opts.scope);
+      for (; ; ) {
+        let q = client.from("financial_ledger").select(
+          "id, created_at, entry_type, user_id, team_leader_id, amount_coins, amount_usd, fx_ratio, metadata"
+        ).in("entry_type", types).order("created_at", { ascending: true }).range(offset, offset + pageSize - 1);
+        if (opts.scope === "tl" && opts.userIds && opts.userIds.length === 1) {
+          q = q.or(`user_id.eq.${opts.userIds[0]},team_leader_id.eq.${opts.userIds[0]}`);
+        } else if (opts.userIds) {
+          if (opts.userIds.length === 0) break;
+          q = q.in("user_id", opts.userIds);
+        }
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+        const rows = data || [];
+        for (const row of rows) addRowToSplit(split, mapFinancialRowToLedger(row));
+        if (rows.length < pageSize) break;
+        offset += pageSize;
+      }
+      const openSplit = await computeComponentSplit(client, {
+        scope: opts.scope,
+        userIds: opts.userIds,
+        start: settlementBounds.periodStart,
+        end: at < settlementBounds.periodEnd ? at : settlementBounds.periodEnd,
+        peg,
+        includeClosedBonus: false
+      });
+      split.callCoins += openSplit.callCoins;
+      split.callUsd += openSplit.callUsd;
+      split.giftCoins += openSplit.giftCoins;
+      split.giftUsd += openSplit.giftUsd;
+      split.trueUpCoins += openSplit.trueUpCoins;
+      split.trueUpUsd += openSplit.trueUpUsd;
+      split.rewardCoins += openSplit.rewardCoins;
+      split.rewardUsd += openSplit.rewardUsd;
+      return finalizeSplit(split);
+    })()
+  ]);
+  return {
+    scope: opts.scope,
+    coinUsdPeg: peg,
+    week: weekKpi,
+    month: monthKpi,
+    lifetime: {
+      coins: lifetimeCoins,
+      usd: lifetimeUsd,
+      entryCount: lifetimeFin.entryCount,
+      periodStart: null,
+      periodEnd: null
+    },
+    periodClock: {
+      cycleType: config.creatorTargetCycle,
+      periodCloseUtcTime: config.periodCloseUtcTime,
+      settlementEnabled: config.settlementEnabled,
+      periodStart: toIso(settlementBounds.periodStart),
+      periodEnd: toIso(settlementBounds.periodEnd),
+      nextCloseAt: nextCloseAtDate.toISOString(),
+      remainingMs,
+      elapsedRatio: Math.min(1, Math.max(0, 1 - remainingMs / totalMs)),
+      periodId: ensured.period?.id ?? null,
+      periodStatus: ensured.period?.status ?? null
+    },
+    extras: {
+      entriesThisWeek: weekSeriesPack.entryCount,
+      avgDailyUsdThisWeek: coinsToUsd(weekCoins, peg) / daysElapsedWeek,
+      settlementCycleLabel: String(config.creatorTargetCycle || "weekly")
+    },
+    series: {
+      week: weekSeriesPack.series,
+      month: monthSeriesPack.series
+    },
+    componentSplit: {
+      week: weekSplit,
+      month: monthSplit,
+      lifetime: lifetimeSplit
+    }
+  };
+}
+async function buildEarningsLedger(opts) {
+  const client = opts.client ?? getSupabaseAdmin();
+  if (!client) throw new Error("Supabase admin client unavailable");
+  const at = opts.at ?? /* @__PURE__ */ new Date();
+  const config = opts.config ?? await loadFinanceSystemConfig();
+  const peg = getCoinUsdPeg(config);
+  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 500);
+  const groupBy = opts.groupBy === "month" ? "month" : "week";
+  const mode = opts.mode;
+  if (mode === "lifetime" && !opts.periodKey) {
+    const groups = await loadLifetimeGroups(client, {
+      scope: opts.scope,
+      userIds: opts.userIds,
+      groupBy,
+      peg,
+      limit
+    });
+    return {
+      scope: opts.scope,
+      mode,
+      groupBy,
+      rows: [],
+      groups,
+      periodStart: null,
+      periodEnd: null
+    };
+  }
+  if (mode === "lifetime" && opts.periodKey) {
+    const bounds2 = parsePeriodKey(String(opts.periodKey), groupBy);
+    if (!bounds2) {
+      throw Object.assign(new Error("Invalid periodKey"), { code: "INVALID_PERIOD_KEY" });
+    }
+    const finRows = await loadFinancialLedgerRows(client, {
+      scope: opts.scope,
+      userIds: opts.userIds,
+      start: bounds2.start,
+      end: bounds2.end,
+      limit
+    });
+    const now = at;
+    const isCurrent = now >= bounds2.start && now < bounds2.end;
+    let rows2 = finRows;
+    if (isCurrent) {
+      const walletRows = await loadWalletLedgerRows(client, {
+        scope: opts.scope,
+        userIds: opts.userIds,
+        start: bounds2.start,
+        end: now < bounds2.end ? now : bounds2.end,
+        peg,
+        limit
+      });
+      const seen = new Set(finRows.map((r) => r.id));
+      rows2 = [...finRows, ...walletRows.filter((r) => !seen.has(r.id))].slice(0, limit);
+    }
+    return {
+      scope: opts.scope,
+      mode,
+      groupBy,
+      periodKey: opts.periodKey,
+      rows: rows2,
+      groups: [],
+      periodStart: toIso(bounds2.start),
+      periodEnd: toIso(bounds2.end)
+    };
+  }
+  const bounds = mode === "month" ? calendarMonthBounds(at) : calendarWeekBounds(at);
+  const endLive = at < bounds.end ? at : bounds.end;
+  const rows = await loadWalletLedgerRows(client, {
+    scope: opts.scope,
+    userIds: opts.userIds,
+    start: bounds.start,
+    end: endLive,
+    peg,
+    limit
+  });
+  return {
+    scope: opts.scope,
+    mode,
+    groupBy: null,
+    rows,
+    groups: [],
+    periodStart: toIso(bounds.start),
+    periodEnd: toIso(bounds.end)
+  };
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   DEFAULT_COIN_TO_USD_RATIO,
@@ -3152,11 +6241,17 @@ function summarizeHostSettlementLines(lines) {
   DEFAULT_FEMALE_PAYOUT_RATIO_USD,
   DEFAULT_TARGET_THRESHOLDS,
   EMPTY_HOST_EARNINGS_BREAKDOWN,
+  HOST_SALARY_FINANCIAL_ENTRY_TYPES,
+  HOST_SALARY_LINE_COMPONENTS,
+  HOST_SALARY_WALLET_TYPES,
+  NON_SALARY_REWARD_WALLET_TYPES,
   PAYABLE_MODEL_NOTES,
   PAYABLE_SOURCE_OF_TRUTH,
   PAYOUT_PERIOD_END_ONLY,
   PayoutPolicyError,
   SETTLEMENT_STATUS_TRANSITIONS,
+  acknowledgePayeeSalary,
+  agencyMarkHostPaid,
   aggregateHostCallBurnForTrueUp,
   aggregateWalletLedgerEarnings,
   appendFinancialLedgerEntries,
@@ -3167,9 +6262,15 @@ function summarizeHostSettlementLines(lines) {
   applyCreatorEarnCoins,
   assertManualPayoutAllowed,
   assertManualPayoutAllowedSync,
+  buildEarningsLedger,
+  buildEarningsOverview,
+  buildSalaryEstimatePreview,
+  buildSalaryPeriodPdf,
+  buildSalaryPeriodXlsx,
   buildSettlementBatches,
   canTransitionSettlementStatus,
   cancelSettlementBatch,
+  categoryFromSettlementComponent,
   checkManualPayoutAllowed,
   closeDuePeriods,
   closePeriod,
@@ -3199,19 +6300,33 @@ function summarizeHostSettlementLines(lines) {
   getNextCloseAt,
   getTargetThresholds,
   getUserPeriodAccrual,
+  groupLiveLedgerRowsByCall,
+  groupWalletLedgerByCall,
   invalidateFinanceConfigCache,
+  isGiftWalletMetadata,
+  isHostSalaryFinancialEntryType,
+  isNonSalaryRewardType,
+  labelEarningsMoneyCategory,
   labelSettlementComponent,
+  listSalaryPeriods,
   loadFinanceSystemConfig,
   loadGiftSharePercents,
+  loadSalaryPayoutDetailsByUserIds,
+  loadSalaryPeriodDetail,
   markBatchAdminPaid,
   markBatchTlConfirmed,
+  markPeriodAdminPaid,
   normalizeCycleType,
   normalizeFxRatio,
+  normalizePayeeSalaryStatus,
   planHostShareTrueUps,
   postHostShareTrueUpWallet,
+  reconcileBatch,
   recordBatchCreatedEvent,
   refreshFinanceConfigInBackground,
   resolveCatalogGiftById,
+  resolveEarningsScopeAccess,
+  resolveSessionCallId,
   resolveTargetThresholds,
   summarizeHostSettlementLines,
   targetBonusUsdForTier,

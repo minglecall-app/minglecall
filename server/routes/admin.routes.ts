@@ -24,11 +24,13 @@ import { hardDeleteUserCompletely, cleanupOrphanAuthUsersAdmin } from '../userHa
 import { isR2Configured, updateR2RuntimeConfig } from '../r2Storage';
 import { requireAdmin, requireAuth } from '../middleware/auth';
 import { listServerDiagnosticModules, runServerDiagnostic } from '../../lib/systemDiagnostics';
+import { listK6SmokeScenarios, runK6Smoke } from '../../lib/k6Smoke';
 import { getPasswordPolicyError } from '../../shared/passwordPolicy';
 import {
   DEFAULT_EMAIL_TEMPLATES,
   parseEmailTemplatesJson,
 } from '../../shared/emailTemplates';
+import { createOfficeRbacRouter } from './officeRbac.routes';
 
 /** Read ALLOW_FACTORY_RESET from live .env (so edits apply without full restart) + process.env. */
 function getAllowFactoryResetRaw(): string {
@@ -83,6 +85,9 @@ export function createAdminRouter(ctx: ServerRuntime): Router {
     resetVolatileRuntimeState,
     broadcastCreatorMetrics,
   } = ctx;
+
+  // Control Center — office roles / permissions / create office users
+  router.use('/office-rbac', createOfficeRbacRouter());
 
   // Status probe so admin UI can disable Factory Wipe before submit
   router.get('/factory-reset-status', requireAdmin, (_req, res) => {
@@ -1052,6 +1057,38 @@ export function createAdminRouter(ctx: ServerRuntime): Router {
       return res.status(500).json({
         success: false,
         error: { message: 'Diagnostic failed', code: 'DIAGNOSTIC_FAILED' },
+      });
+    }
+  });
+
+  router.post('/k6-smoke', requireAdmin, async (req, res) => {
+    const scenarioId = String(req.body?.scenarioId || '').trim();
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '');
+    const proto = String(req.headers['x-forwarded-proto'] || 'http');
+    const authorization = String(req.headers.authorization || '');
+    try {
+      const result = await runK6Smoke(scenarioId, {
+        authorization,
+        concurrency: req.body?.concurrency,
+        baseUrl: req.body?.baseUrl,
+        host,
+        proto,
+      });
+      if (!result) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            message: `Unknown k6 smoke scenario. Known: ${listK6SmokeScenarios().join(', ')}`,
+            code: 'UNKNOWN_SCENARIO',
+          },
+        });
+      }
+      return res.json({ success: true, data: result });
+    } catch (err: any) {
+      console.error('[k6-smoke]', scenarioId, err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: { message: 'k6 smoke failed', code: 'K6_SMOKE_FAILED' },
       });
     }
   });

@@ -140,11 +140,16 @@ export {
 export {
   SETTLEMENT_STATUS_TRANSITIONS,
   canTransitionSettlementStatus,
+  reconcileBatch,
+  agencyMarkHostPaid,
   markBatchAdminPaid,
+  markPeriodAdminPaid,
+  acknowledgePayeeSalary,
   markBatchTlConfirmed,
   cancelSettlementBatch,
   appendSettlementNote,
   recordBatchCreatedEvent,
+  normalizePayeeSalaryStatus,
   type TransitionResult,
 } from './statusTransition';
 
@@ -189,3 +194,52 @@ export {
   PAYABLE_SOURCE_OF_TRUTH,
   PAYABLE_MODEL_NOTES,
 } from './payableModel';
+
+export {
+  listSalaryPeriods,
+  loadSalaryPeriodDetail,
+  type SalaryPeriodDetail,
+  type SalaryTlSection,
+  type SalaryPayeeRow,
+} from './salaryPeriodView';
+
+export {
+  buildSalaryEstimatePreview,
+  type SalaryEstimatePreview,
+  type SalaryEstimatePayeeRow,
+  type SalaryEstimateTlSection,
+  type SalaryEstimateScope,
+} from './salaryEstimatePreview';
+
+export {
+  loadSalaryPayoutDetailsByUserIds,
+  type SalaryPayoutDetails,
+} from './salaryPayoutAttach';
+
+export { buildSalaryPeriodXlsx, buildSalaryPeriodPdf } from './salaryExport';
+
+export {
+  resolveEarningsScopeAccess,
+  buildEarningsOverview,
+  buildEarningsLedger,
+  type ResolveEarningsScopeInput,
+  type ResolveEarningsScopeResult,
+} from './earningsOverview';
+
+export {
+  HOST_SALARY_LINE_COMPONENTS,
+  HOST_SALARY_FINANCIAL_ENTRY_TYPES,
+  HOST_SALARY_WALLET_TYPES,
+  NON_SALARY_REWARD_WALLET_TYPES,
+  isGiftWalletMetadata,
+  isNonSalaryRewardType,
+  isHostSalaryFinancialEntryType,
+  labelEarningsMoneyCategory,
+  categoryFromSettlementComponent,
+} from '../../shared/finance/salaryComponents';
+
+export {
+  groupWalletLedgerByCall,
+  groupLiveLedgerRowsByCall,
+  resolveSessionCallId,
+} from '../../shared/finance/groupWalletLedgerByCall';

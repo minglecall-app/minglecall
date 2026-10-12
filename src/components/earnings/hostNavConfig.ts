@@ -9,6 +9,7 @@ export type HostTabKey =
   | 'engagement'
   | 'ratings'
   | 'salary'
+  | 'payout_cards'
   | 'call_logs';
 
 export type HostEarningsTimeframe = 'daily' | 'weekly' | 'monthly' | 'yearly';
@@ -22,6 +23,7 @@ export type HostNavIconName =
   | 'PhoneCall'
   | 'Star'
   | 'ShieldCheck'
+  | 'CreditCard'
   | 'History'
   | 'Calendar'
   | 'Users'
@@ -81,13 +83,7 @@ export const HOST_NAV_GROUPS: HostNavGroup[] = [
         icon: 'TrendingUp',
         buttonId: 'host-nav-earnings',
         requiresCanEarn: true,
-        title: 'Call activity & estimates',
-        children: [
-          { id: 'daily', label: 'Daily', icon: 'Calendar' },
-          { id: 'weekly', label: 'Weekly', icon: 'Calendar' },
-          { id: 'monthly', label: 'Monthly', icon: 'Calendar' },
-          { id: 'yearly', label: 'Yearly', icon: 'Calendar' },
-        ],
+        title: 'Week / month / lifetime finance ledger',
       },
       {
         id: 'salary',
@@ -96,6 +92,14 @@ export const HOST_NAV_GROUPS: HostNavGroup[] = [
         buttonId: 'host-nav-salary',
         requiresCanEarn: true,
         title: 'Salary status & settlements',
+      },
+      {
+        id: 'payout_cards',
+        label: 'Payout Cards',
+        icon: 'CreditCard',
+        buttonId: 'host-nav-payout-cards',
+        requiresCanEarn: true,
+        title: 'PayPal, bank, and wallet details for local salary pay',
       },
     ],
   },

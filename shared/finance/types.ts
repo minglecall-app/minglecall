@@ -34,6 +34,11 @@ export type SettlementBatchStatus =
   | 'tl_confirmed'
   | 'cancelled';
 
+/** Confirm-amounts gate before Admin remittance / Agency host pay (2A). */
+export type SettlementReconcileStatus = 'unreconciled' | 'reconciled';
+
+export type SettlementReconciledByRole = 'admin' | 'team_leader';
+
 export type SettlementPayeeRole = 'host' | 'team_leader';
 
 export type SettlementLineComponent =
@@ -44,14 +49,19 @@ export type SettlementLineComponent =
   | 'tl_commission'
   | 'other';
 
-export type HostSalaryStatus = 'pending' | 'paid';
+/** Payee-facing line status (host and TL commission lines). Legacy `paid` maps to acknowledged. */
+export type HostSalaryStatus = 'pending' | 'admin_paid' | 'acknowledged' | 'paid';
 
 export type SettlementEventType =
   | 'created'
+  | 'reconciled'
   | 'admin_marked_paid'
+  | 'agency_marked_host_paid'
   | 'tl_confirmed'
   | 'cancelled'
-  | 'note';
+  | 'note'
+  | 'host_acknowledged'
+  | 'tl_acknowledged';
 
 export type CreatorPerformanceTier = 'bronze' | 'silver' | 'gold';
 
@@ -184,4 +194,176 @@ export interface CreatorPeriodSnapshot {
   responseHealthScore: number;
   metricsSnapshot: Record<string, unknown>;
   createdAt: string;
+}
+
+/** Role-scoped earnings dashboard (Platform / TL / Host). */
+export type EarningsScope = 'platform' | 'tl' | 'host';
+
+export type EarningsLedgerMode = 'week' | 'month' | 'lifetime';
+
+export type EarningsGroupBy = 'week' | 'month';
+
+export interface EarningsKpiBucket {
+  coins: number;
+  usd: number;
+  entryCount: number;
+  periodStart: string | null;
+  periodEnd: string | null;
+}
+
+export interface EarningsSeriesPoint {
+  date: string;
+  label: string;
+  coins: number;
+  usd: number;
+}
+
+export interface EarningsPeriodClock {
+  cycleType: SettlementCycleType | string;
+  periodCloseUtcTime: string;
+  settlementEnabled: boolean;
+  periodStart: string;
+  periodEnd: string;
+  nextCloseAt: string;
+  remainingMs: number;
+  /** 0..1 progress through settlement window toward nextCloseAt. */
+  elapsedRatio: number;
+  periodId: string | null;
+  periodStatus: string | null;
+}
+
+/** Component split for host (and TL/platform where applicable). */
+export interface EarningsComponentSplit {
+  callCoins: number;
+  callUsd: number;
+  giftCoins: number;
+  giftUsd: number;
+  trueUpCoins: number;
+  trueUpUsd: number;
+  tierBonusCoins: number;
+  tierBonusUsd: number;
+  /** Non-salary spendable rewards (REWARD_*). */
+  rewardCoins: number;
+  rewardUsd: number;
+  /** Salary-included total (excludes rewards). */
+  salaryCoins: number;
+  salaryUsd: number;
+  totalCoins: number;
+  totalUsd: number;
+}
+
+export interface EarningsOverviewResponse {
+  scope: EarningsScope;
+  coinUsdPeg: number;
+  week: EarningsKpiBucket;
+  month: EarningsKpiBucket;
+  lifetime: EarningsKpiBucket;
+  periodClock: EarningsPeriodClock;
+  extras: {
+    entriesThisWeek: number;
+    avgDailyUsdThisWeek: number;
+    settlementCycleLabel: string;
+  };
+  series: {
+    week: EarningsSeriesPoint[];
+    month: EarningsSeriesPoint[];
+  };
+  /** Host-focused component split for current week / month / lifetime (salary buckets + rewards). */
+  componentSplit?: {
+    week: EarningsComponentSplit;
+    month: EarningsComponentSplit;
+    lifetime: EarningsComponentSplit;
+  };
+}
+
+export type EarningsMoneyCategory =
+  | 'call'
+  | 'gift'
+  | 'true_up'
+  | 'tier_bonus'
+  | 'tl_commission'
+  | 'platform'
+  | 'reward'
+  | 'other';
+
+export interface EarningsLedgerRow {
+  id: string;
+  createdAt: string;
+  entryType: string;
+  userId: string | null;
+  /** Resolved from profiles.name when available. */
+  userName: string | null;
+  teamLeaderId: string | null;
+  /** wallet_ledger.call_id when present. */
+  callId: string | null;
+  /** Host (receiver) for TL_EARN rows — from metadata or call_logs. */
+  hostId: string | null;
+  /** Resolved host display name for TL ledger. */
+  hostName: string | null;
+  /**
+   * Single-minute rows: that minute.
+   * Call-grouped rows: null (use billedMinutes / minuteFrom / minuteTo).
+   */
+  billingMinute: number | null;
+  /** Distinct billed minutes in a call-grouped row. */
+  billedMinutes: number | null;
+  /** Min billing_minute in group (call-grouped). */
+  minuteFrom: number | null;
+  /** Max billing_minute in group (call-grouped). */
+  minuteTo: number | null;
+  /** True when this row aggregates multiple wallet_ledger minutes. */
+  grouped: boolean;
+  /** Earliest created_at in group (ISO); equals createdAt when not grouped. */
+  firstAt: string | null;
+  /** Latest created_at in group (ISO). */
+  lastAt: string | null;
+  amountCoins: number;
+  amountUsd: number;
+  fxRatio: number;
+  source: 'wallet' | 'financial';
+  /** Primary money category for this row. */
+  category: EarningsMoneyCategory;
+  /** False for REWARD_* and other non-settlement credits. */
+  inSalary: boolean;
+  callCoins: number;
+  callUsd: number;
+  giftCoins: number;
+  giftUsd: number;
+  trueUpCoins: number;
+  trueUpUsd: number;
+  tierBonusCoins: number;
+  tierBonusUsd: number;
+  rewardCoins: number;
+  rewardUsd: number;
+  /**
+   * Platform ledger call-composite: host/TL shares credited for this call,
+   * and platform retained = burn − host − TL.
+   */
+  hostEarnCoins: number;
+  hostEarnUsd: number;
+  tlEarnCoins: number;
+  tlEarnUsd: number;
+  platformRetainedCoins: number;
+  platformRetainedUsd: number;
+}
+
+export interface EarningsLifetimeGroup {
+  periodKey: string;
+  label: string;
+  periodStart: string;
+  periodEnd: string;
+  totalCoins: number;
+  totalUsd: number;
+  entryCount: number;
+}
+
+export interface EarningsLedgerResponse {
+  scope: EarningsScope;
+  mode: EarningsLedgerMode;
+  groupBy: EarningsGroupBy | null;
+  periodKey?: string | null;
+  rows: EarningsLedgerRow[];
+  groups: EarningsLifetimeGroup[];
+  periodStart: string | null;
+  periodEnd: string | null;
 }

@@ -20,7 +20,7 @@ import { BrandLockup } from '../navigation/ConfiguredChrome';
 
 const ROLES: { id: NavAudienceRole; label: string }[] = [
   { id: 'admin', label: 'Admin' },
-  { id: 'team_leader', label: 'Team Leader' },
+  { id: 'team_leader', label: 'Agency' },
   { id: 'male_user', label: 'Male user' },
   { id: 'female_user', label: 'Female user' },
   { id: 'female_host', label: 'Female hosts' },

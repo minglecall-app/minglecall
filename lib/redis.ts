@@ -3,7 +3,7 @@
  * Keys: presence:{userId}, profile:{userId}, rate:{userId}:{endpoint}, call:{callId}
  *
  * Credential order matches api/_lib/cjs/redisEnv.js:
- * UPSTASH_REDIS_REST_* , then Vercel KV_REST_API_* , then REDIS_URL when it is https.
+ * UPSTASH_REDIS_REST_* , then Vercel KV_REST_API_* , then https REDIS_URL / KV_URL.
  */
 import { Redis } from '@upstash/redis';
 
@@ -28,8 +28,10 @@ export function getRedisRestCredentials(): { url: string; token: string } {
   const url =
     httpUrl(process.env.UPSTASH_REDIS_REST_URL) ||
     httpUrl(process.env.KV_REST_API_URL) ||
-    httpUrl(process.env.REDIS_URL);
-  const token = cleanEnv(process.env.UPSTASH_REDIS_REST_TOKEN) || cleanEnv(process.env.KV_REST_API_TOKEN);
+    httpUrl(process.env.REDIS_URL) ||
+    httpUrl(process.env.KV_URL);
+  const token =
+    cleanEnv(process.env.UPSTASH_REDIS_REST_TOKEN) || cleanEnv(process.env.KV_REST_API_TOKEN);
   return { url, token };
 }
 

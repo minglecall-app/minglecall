@@ -802,7 +802,7 @@ export async function signInWithEmailPassword(
         if (profile.isBanned) {
           const bannedUntil = profile.bannedUntil;
           if (bannedUntil && new Date(bannedUntil).getTime() > Date.now()) {
-            const banner = profile.bannedByRole === 'team_leader' ? 'your Team Leader' : 'Administration';
+            const banner = profile.bannedByRole === 'team_leader' ? 'your agency' : 'Administration';
             const reason = profile.banReason || 'Policy review';
             await supabase.auth.signOut();
             return {

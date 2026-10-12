@@ -35,7 +35,7 @@ const ROLES: { id: AdminAnalyticsRole | 'all'; label: string }[] = [
   { id: 'male_user', label: 'Male' },
   { id: 'female_user', label: 'Regular Female' },
   { id: 'female_creator', label: 'Creator' },
-  { id: 'team_leader', label: 'Team Leader' },
+  { id: 'team_leader', label: 'Agency' },
 ];
 
 export const AnalyticsFilterBar: React.FC<AnalyticsFilterBarProps> = ({

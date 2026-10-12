@@ -15,9 +15,14 @@ import {
 import { evaluateManualPayoutPolicy, PAYOUT_PERIOD_END_ONLY } from '../../server/finance/payoutPolicy.ts';
 import { buildSettlementBatches } from '../../server/finance/settlement.ts';
 import {
+  adminRemitLinePayeeRoleFilter,
+  allPayeeLinesAcknowledged,
   canTransitionSettlementStatus,
+  evaluateAgencyMarkHostPaidGate,
+  reconcileGateOk,
   SETTLEMENT_STATUS_TRANSITIONS,
 } from '../../server/finance/statusTransition.ts';
+import type { SettlementEventType } from './types.ts';
 import { buildDateRange } from '../../src/utils/adminAnalytics.ts';
 import { computePerformanceTier, targetBonusUsdForTier } from './targetBonus.ts';
 
@@ -106,6 +111,110 @@ describe('status transitions — paid rules', () => {
     assert.equal(canTransitionSettlementStatus('admin_paid', 'tl_confirmed'), true);
     assert.equal(canTransitionSettlementStatus('tl_confirmed', 'admin_paid'), false);
     assert.deepEqual([...SETTLEMENT_STATUS_TRANSITIONS.tl_confirmed], []);
+  });
+});
+
+/**
+ * Manual continuity checklist (Admin / Agency / Host badges):
+ * 1. Close period → batches Not reconciled / Unpaid
+ * 2. Admin or Agency Reconcile → Reconciled · awaiting remittance
+ * 3. Admin Remit Agency bundle → TL line Remitted; host lines still Unpaid
+ * 4. Agency Mark paid per host → Salary Paid; Host Acknowledge enabled
+ * 5. Host ack → Received; Agency ack commission → Received
+ * 6. All acked → batch Complete for Admin + Agency
+ * Direct-host: Admin reconcile → Admin Salary Paid → Host ack → Complete
+ */
+describe('salary reconcile → remit → Agency host pay → Complete', () => {
+  it('blocks Salary Paid / remit when unreconciled', () => {
+    assert.equal(reconcileGateOk('unreconciled'), false);
+    assert.equal(reconcileGateOk(null), false);
+    assert.equal(reconcileGateOk('reconciled'), true);
+  });
+
+  it('Admin remit on TL bundle touches only team_leader lines (not hosts)', () => {
+    assert.equal(adminRemitLinePayeeRoleFilter('team_leader_bundle'), 'team_leader');
+    assert.equal(adminRemitLinePayeeRoleFilter('direct_host'), null);
+  });
+
+  it('Agency mark-host-paid requires own remitted reconciled bundle', () => {
+    const ok = evaluateAgencyMarkHostPaidGate({
+      batchKind: 'team_leader_bundle',
+      teamLeaderId: 'tl_1',
+      actorUserId: 'tl_1',
+      reconcileStatus: 'reconciled',
+      batchStatus: 'admin_paid',
+      hostUserId: 'host_a',
+    });
+    assert.equal(ok.ok, true);
+
+    const unrec = evaluateAgencyMarkHostPaidGate({
+      batchKind: 'team_leader_bundle',
+      teamLeaderId: 'tl_1',
+      actorUserId: 'tl_1',
+      reconcileStatus: 'unreconciled',
+      batchStatus: 'admin_paid',
+      hostUserId: 'host_a',
+    });
+    assert.equal(unrec.ok, false);
+    if (!unrec.ok) assert.equal(unrec.code, 'RECONCILE_REQUIRED');
+
+    const beforeRemit = evaluateAgencyMarkHostPaidGate({
+      batchKind: 'team_leader_bundle',
+      teamLeaderId: 'tl_1',
+      actorUserId: 'tl_1',
+      reconcileStatus: 'reconciled',
+      batchStatus: 'pending_admin_pay',
+      hostUserId: 'host_a',
+    });
+    assert.equal(beforeRemit.ok, false);
+
+    const otherTl = evaluateAgencyMarkHostPaidGate({
+      batchKind: 'team_leader_bundle',
+      teamLeaderId: 'tl_1',
+      actorUserId: 'tl_2',
+      reconcileStatus: 'reconciled',
+      batchStatus: 'admin_paid',
+      hostUserId: 'host_a',
+    });
+    assert.equal(otherTl.ok, false);
+    if (!otherTl.ok) assert.equal(otherTl.code, 'FORBIDDEN');
+
+    const direct = evaluateAgencyMarkHostPaidGate({
+      batchKind: 'direct_host',
+      teamLeaderId: null,
+      actorUserId: 'tl_1',
+      reconcileStatus: 'reconciled',
+      batchStatus: 'admin_paid',
+      hostUserId: 'host_a',
+    });
+    assert.equal(direct.ok, false);
+  });
+
+  it('Complete only when all payee lines acknowledged (hosts + TL commission)', () => {
+    assert.equal(
+      allPayeeLinesAcknowledged(['acknowledged', 'acknowledged', 'acknowledged']),
+      true
+    );
+    assert.equal(
+      allPayeeLinesAcknowledged(['acknowledged', 'admin_paid', 'acknowledged']),
+      false
+    );
+    assert.equal(allPayeeLinesAcknowledged(['paid', 'acknowledged']), true);
+    assert.equal(allPayeeLinesAcknowledged([]), false);
+  });
+
+  it('settlement event types include reconcile + agency_marked_host_paid', () => {
+    const required: SettlementEventType[] = [
+      'reconciled',
+      'agency_marked_host_paid',
+      'admin_marked_paid',
+      'host_acknowledged',
+      'tl_acknowledged',
+      'tl_confirmed',
+    ];
+    for (const t of required) {
+      assert.equal(typeof t, 'string');
+    }
   });
 });
 

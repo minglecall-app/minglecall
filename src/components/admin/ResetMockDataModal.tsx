@@ -720,14 +720,14 @@ export const ResetMockDataModal: React.FC<ResetMockDataModalProps> = ({ isOpen, 
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-slate-200 group-hover:text-white">
-                        Team Leader & Agency Accounts
+                        Agency Accounts
                       </span>
                       <span className="px-1.5 py-0.5 rounded bg-amber-950 text-[10px] text-amber-300 border border-amber-800 font-mono">
                         {teamLeadersCount} agencies
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-400">
-                      Deletes Team Leader accounts and their managed host roster (users with a teamLeaderId).
+                      Deletes Agency accounts and their managed host roster (users with a teamLeaderId).
                     </p>
                   </div>
                 </label>

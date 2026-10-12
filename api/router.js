@@ -17,6 +17,7 @@ const { handleStorage } = require('./_lib/cjs/storageRoutes');
 const { handleAdmin } = require('./_lib/cjs/adminRoutes');
 const { handleAppExtras } = require('./_lib/cjs/appExtrasRoutes');
 const { handleFinance } = require('./_lib/cjs/financeRoutes');
+const { handlePayout } = require('./_lib/cjs/payoutRoutes');
 
 const AVAILABLE = [
   'POST /api/auth/*',
@@ -31,6 +32,7 @@ const AVAILABLE = [
   'GET|POST|PATCH /api/v1/finance/* (periods, ledger, batches, funding, jobs, host/TL)',
   'GET /api/storage/config|media; POST /api/storage/presigned-url|upload|delete',
   'GET|POST|PATCH|DELETE /api/admin/* (schema bundled; granular-reset if ALLOW_FACTORY_RESET; CMS; spectator-token)',
+  'GET|PUT /api/admin/payout/templates; GET /api/payout/templates; GET|PUT|DELETE /api/payout/cards/*',
   'GET|POST /api/creator/* (incl. first-call-bonus), /api/rewards/* (claims live)',
   'GET /api/setup/status; POST setup auth + connectivity tests; save-all blocked on Vercel',
   'GET /api/livekit/status; standalone livekit/config|token',
@@ -99,6 +101,7 @@ module.exports = async function handler(req, res) {
       handleTeamleader,
       handleCore,
       handleFinance,
+      handlePayout,
       handleV1,
       handleStorage,
       handleAdmin,

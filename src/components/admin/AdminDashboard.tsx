@@ -90,11 +90,13 @@ import { ManualCoinModal } from './ManualCoinModal';
 import { EditUserModal } from './EditUserModal';
 import { AdminHomeCMS } from './AdminHomeCMS';
 import { AdminNavBarEditor } from './AdminNavBarEditor';
+import { AdminPayoutCardsCMS } from './AdminPayoutCardsCMS';
 import { UserAnalyticsModal } from './UserAnalyticsModal';
 import { AdminSilentCallMonitorModal } from './AdminSilentCallMonitorModal';
 import { AdminDatabaseStorageConfig } from './AdminDatabaseStorageConfig';
 import { AdminApiHealthPanel } from './AdminApiHealthPanel';
 import { AdminSystemTestingPanel } from './AdminSystemTestingPanel';
+import { AdminK6LoadTestingPanel } from './AdminK6LoadTestingPanel';
 import { ResetMockDataModal } from './ResetMockDataModal';
 import { AdminTaxonomyManager } from './AdminTaxonomyManager';
 import { AdminCreatorTargetConfig } from './AdminCreatorTargetConfig';
@@ -108,7 +110,15 @@ import { AdminAnalyticsHub } from './analytics/AdminAnalyticsHub';
 import type { AnalyticsHubTab } from './analytics/AdminAnalyticsHub';
 import { AdminEconomyConfigHub } from './AdminEconomyConfigHub';
 import { AdminShell } from './AdminShell';
-import { AdminSubTabKey, defaultL2ForTab } from './adminNavConfig';
+import {
+  ADMIN_NAV_GROUPS,
+  AdminSubTabKey,
+  defaultL2ForTab,
+  filterAdminNavGroups,
+} from './adminNavConfig';
+import { AdminOfficeRbacPage } from './AdminOfficeRbacPage';
+import { fetchOfficeRbacMe } from '../../services/officeRbacApi';
+import { hasOfficePermission } from '../../../shared/officeRbac/features';
 
 /** Female hosts managed by a Team Leader — ID/authId first, agencyName only as fallback. */
 function getManagedCreatorsForLeader(leader: UserProfile, allUsers: UserProfile[]): UserProfile[] {
@@ -184,6 +194,10 @@ export const AdminDashboard: React.FC = () => {
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
 
   const [activeSubTab, setActiveSubTab] = useState<AdminSubTabKey>('analytics');
+  const [officeRbac, setOfficeRbac] = useState<{
+    isSuper: boolean;
+    permissions: string[];
+  }>({ isSuper: true, permissions: [] });
   /** Deep-link section inside Coin Burn / Economy hub (A–F). */
   const [economySection, setEconomySection] = useState<'A' | 'B' | 'C' | 'D' | 'E' | 'F' | undefined>(undefined);
   const [analyticsHubTab, setAnalyticsHubTab] = useState<AnalyticsHubTab>('overview');
@@ -195,6 +209,8 @@ export const AdminDashboard: React.FC = () => {
     'db_pool' | 'r2_storage' | 'moderation' | 'features' | 'sql_schema'
   >('db_pool');
   const [financeModuleTab, setFinanceModuleTab] = useState<
+    | 'overview'
+    | 'salary_batches'
     | 'live_ledger'
     | 'platform'
     | 'team_leaders'
@@ -203,11 +219,51 @@ export const AdminDashboard: React.FC = () => {
     | 'batches'
     | 'settlement'
     | 'period'
-  >('live_ledger');
+  >('overview');
   const [cmsSection, setCmsSection] = useState<'banners' | 'policies' | 'shortcuts' | 'discovery_card'>(
     'banners'
   );
   const [activeSpectatorCall, setActiveSpectatorCall] = useState<AdminActiveCall | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await fetchOfficeRbacMe();
+      if (cancelled) return;
+      if (!res.success || !res.data) {
+        // Tables missing or error → treat as legacy full admin so console stays usable
+        setOfficeRbac({ isSuper: true, permissions: [] });
+        return;
+      }
+      setOfficeRbac({
+        isSuper: res.data.isSuper === true,
+        permissions: res.data.permissions || [],
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filteredNavGroups = useMemo(
+    () =>
+      filterAdminNavGroups(ADMIN_NAV_GROUPS, {
+        isSuper: officeRbac.isSuper,
+        permissions: officeRbac.permissions,
+      }),
+    [officeRbac.isSuper, officeRbac.permissions]
+  );
+
+  useEffect(() => {
+    if (officeRbac.isSuper) return;
+    const allowed = filteredNavGroups.flatMap((g) => g.items.filter((i) => i.kind === 'tab'));
+    if (!allowed.length) return;
+    const stillOk = allowed.some((i) => i.id === activeSubTab);
+    if (!stillOk) {
+      const first = allowed[0];
+      setActiveSubTab(first.id as AdminSubTabKey);
+    }
+  }, [filteredNavGroups, officeRbac.isSuper, activeSubTab]);
 
   // Deep-links from host target progress panels (Creator Ops / Economy shares)
   useEffect(() => {
@@ -263,6 +319,18 @@ export const AdminDashboard: React.FC = () => {
   ]);
 
   const navigateAdmin = (tab: AdminSubTabKey, nestedKey?: string) => {
+    if (
+      !hasOfficePermission(
+        { isSuper: officeRbac.isSuper, permissions: officeRbac.permissions },
+        nestedKey ? `${tab}:${nestedKey}` : tab
+      ) &&
+      !hasOfficePermission(
+        { isSuper: officeRbac.isSuper, permissions: officeRbac.permissions },
+        tab
+      )
+    ) {
+      return;
+    }
     setActiveSubTab(tab);
     if (!nestedKey) {
       if (tab === 'financials') setEconomySection(undefined);
@@ -348,7 +416,7 @@ export const AdminDashboard: React.FC = () => {
       if (res && res.publicUrl) {
         setNewLeaderForm((prev) => ({ ...prev, avatarUrl: res.publicUrl }));
       }
-      showToast('Profile Picture Uploaded ☁️', 'Team Leader picture stored on Cloudflare R2.', 'success');
+      showToast('Profile Picture Uploaded ☁️', 'Agency picture stored on Cloudflare R2.', 'success');
       setIsLeaderAvatarModalOpen(false);
     } catch (err: any) {
       console.warn('Leader avatar upload note:', err);
@@ -642,7 +710,12 @@ export const AdminDashboard: React.FC = () => {
     if (userRoleFilter === 'male_user' && roleLabel !== 'Male User') return false;
     if (userRoleFilter === 'female_user' && femaleMark !== 'user') return false;
     if (userRoleFilter === 'female_creator' && femaleMark !== 'creator') return false;
-    if (userRoleFilter === 'team_leader' && roleLabel !== 'Team Leader') return false;
+    if (
+      userRoleFilter === 'team_leader' &&
+      u.role !== 'team_leader' &&
+      u.role !== 'agency_manager'
+    )
+      return false;
     if (userRoleFilter === 'other_user' && roleLabel !== 'Other User') return false;
     if (userRoleFilter === 'admin' && roleLabel !== 'Admin') return false;
 
@@ -677,16 +750,27 @@ export const AdminDashboard: React.FC = () => {
     return coinSpendUSD + payoutsUSD;
   }, [totalCoinBurnAcrossPlatform, payoutRequests, systemSettings.coinUsdPeg, systemSettings.femalePayoutRatioUSD, systemSettings.coinToUSDRatio]);
 
+  const canOffice = (key: string) =>
+    hasOfficePermission(
+      { isSuper: officeRbac.isSuper, permissions: officeRbac.permissions },
+      key
+    );
+
   return (
     <AdminShell
       activeSubTab={activeSubTab}
       activeNestedKey={activeNestedKey}
       onNavigateTab={navigateAdmin}
+      navGroups={filteredNavGroups}
       onSetupWizard={() => {
+        if (!canOffice('setup-wizard')) return;
         window.location.hash = 'server-setup';
         window.location.reload();
       }}
-      onResetData={() => setIsResetModalOpen(true)}
+      onResetData={() => {
+        if (!canOffice('reset-data')) return;
+        setIsResetModalOpen(true);
+      }}
       badges={{
         monitoring: adminActiveCalls.length,
         gifts: virtualGifts.length,
@@ -747,7 +831,7 @@ export const AdminDashboard: React.FC = () => {
               onClick={() => navigateAdmin('financials', 'B')}
               className="p-4 bg-[#13161F] border border-slate-800 border-l-[3px] border-l-emerald-500/70 rounded-2xl text-left cursor-pointer hover:border-pink-500/40"
             >
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Host & Team Leader Shares</div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Host & Agency Shares</div>
               <div className="text-xl font-black text-emerald-400 font-mono tracking-tight">
                 {systemSettings.femaleHostSharePercent ?? DEFAULT_FEMALE_HOST_SHARE_PERCENT}%
                 <span className="text-sm text-slate-400 font-semibold"> base</span>
@@ -1797,7 +1881,7 @@ export const AdminDashboard: React.FC = () => {
               }}
               className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-2xl text-left cursor-pointer hover:border-indigo-500/40"
             >
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Team Leader Share</span>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Agency Share</span>
               <div className="text-xl font-black text-indigo-400 mt-1">
                 {systemSettings.giftTeamLeaderSharePercent ?? DEFAULT_GIFT_TEAM_LEADER_SHARE_PERCENT}%
               </div>
@@ -2074,10 +2158,10 @@ export const AdminDashboard: React.FC = () => {
             <div>
               <h3 className="text-lg font-extrabold text-white flex items-center space-x-2">
                 <Crown className="w-5 h-5 text-amber-400" />
-                <span>Team Leaders & Agency Guilds</span>
+                <span>Agencies</span>
               </h3>
               <p className="text-xs text-slate-400 mt-1">
-                Only root administrators can create Team Leaders. Team leaders can register female hosts. Individual earning overrides are set by Admin from the User List.
+                Only root administrators can create Agencies. Agencies can register female hosts. Individual earning overrides are set by Admin from the User List.
               </p>
             </div>
 
@@ -2087,7 +2171,7 @@ export const AdminDashboard: React.FC = () => {
               className="px-4 py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-bold text-xs rounded-xl flex items-center space-x-1.5 shadow-lg shadow-amber-500/20 cursor-pointer"
             >
               <UserPlus className="w-4 h-4" />
-              <span>+ Create Team Leader</span>
+              <span>+ Create Agency</span>
             </button>
           </div>
 
@@ -2095,16 +2179,16 @@ export const AdminDashboard: React.FC = () => {
           {users.filter((u) => u.role === 'team_leader').length === 0 ? (
             <div className="bg-slate-950 border border-slate-800 rounded-2xl p-12 text-center">
               <Crown className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-              <h4 className="text-base font-bold text-slate-300">No Team Leaders Registered Yet</h4>
+              <h4 className="text-base font-bold text-slate-300">No Agencies Registered Yet</h4>
               <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                Create your first Team Leader agency account to delegate female creator recruitment.
+                Create your first Agency account to delegate female creator recruitment.
               </p>
               <button
                 onClick={() => setIsAddLeaderOpen(true)}
                 className="mt-4 px-4 py-2 bg-amber-500 text-slate-950 rounded-xl text-xs font-bold hover:bg-amber-400 transition-all cursor-pointer inline-flex items-center gap-1"
               >
                 <UserPlus className="w-4 h-4" />
-                <span>Create Team Leader</span>
+                <span>Create Agency</span>
               </button>
             </div>
           ) : (
@@ -2182,7 +2266,7 @@ export const AdminDashboard: React.FC = () => {
                         <button
                           onClick={() => adminDeleteUser(leader.id)}
                           className="p-1.5 bg-rose-950/40 hover:bg-rose-900 text-rose-300 border border-rose-800/40 rounded-lg text-xs cursor-pointer"
-                          title="Delete Team Leader"
+                          title="Delete Agency"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -2233,7 +2317,7 @@ export const AdminDashboard: React.FC = () => {
                 <div className="overflow-y-auto custom-scrollbar p-4 space-y-2 flex-1">
                   {managedCreatorsForModal.length === 0 ? (
                     <div className="p-10 text-center text-slate-500 text-xs font-mono">
-                      No female creators linked to this Team Leader yet.
+                      No female creators linked to this Agency yet.
                     </div>
                   ) : (
                     managedCreatorsForModal.map((host) => (
@@ -2317,7 +2401,7 @@ export const AdminDashboard: React.FC = () => {
                       <Crown className="w-5 h-5" />
                     </div>
                     <div>
-                      <h4 className="font-bold text-white text-base">Create New Team Leader</h4>
+                      <h4 className="font-bold text-white text-base">Create New Agency</h4>
                       <p className="text-xs text-slate-400">Admin privilege: Assign agency & custom commission tier</p>
                     </div>
                   </div>
@@ -2337,7 +2421,7 @@ export const AdminDashboard: React.FC = () => {
                       return;
                     }
                     if (!newLeaderForm.email.trim() || !newLeaderForm.email.includes('@')) {
-                      showToast('Validation Error', 'Login email is required so the team leader can sign in.', 'error');
+                      showToast('Validation Error', 'Login email is required so the agency can sign in.', 'error');
                       return;
                     }
                     const pwError = getPasswordPolicyError(newLeaderForm.password);
@@ -2387,7 +2471,7 @@ export const AdminDashboard: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-300 mb-1">
-                        Team Leader Name <span className="text-rose-400">*</span>
+                        Director / Contact Name <span className="text-rose-400">*</span>
                       </label>
                       <input
                         type="text"
@@ -2609,7 +2693,7 @@ export const AdminDashboard: React.FC = () => {
                   <div className="p-3.5 bg-slate-950/80 border border-slate-700/70 rounded-2xl space-y-3">
                     <div className="flex items-center justify-between">
                       <label className="block font-semibold text-slate-300 text-xs">
-                        Team Leader Profile Picture <span className="text-amber-400 font-normal">☁️ Cloudflare R2</span>
+                        Agency Profile Picture <span className="text-amber-400 font-normal">☁️ Cloudflare R2</span>
                       </label>
                       {isUploadingLeaderAvatar && (
                         <span className="text-[10px] text-amber-300 animate-pulse font-mono font-bold">
@@ -2623,9 +2707,9 @@ export const AdminDashboard: React.FC = () => {
                       <div className="relative shrink-0 group">
                         <img
                           src={newLeaderForm.avatarUrl || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=400'}
-                          alt="Team Leader headshot"
+                          alt="Agency headshot"
                           onError={(e) => {
-                            (e.target as HTMLImageElement).src = getFallbackAvatar(newLeaderForm.name || 'Team Leader', 'female', 'team_leader');
+                            (e.target as HTMLImageElement).src = getFallbackAvatar(newLeaderForm.name || 'Agency', 'female', 'team_leader');
                           }}
                           className="w-16 h-16 rounded-2xl object-cover ring-2 ring-amber-400 shadow-lg shadow-amber-950/40"
                         />
@@ -2646,8 +2730,8 @@ export const AdminDashboard: React.FC = () => {
 
                       <div className="flex-1 min-w-0 space-y-1.5">
                         <div className="flex items-center space-x-1.5 text-xs text-white font-bold truncate">
-                          <span>{newLeaderForm.name || 'New Team Leader'}</span>
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">Team Leader</span>
+                          <span>{newLeaderForm.name || 'New Agency'}</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">Agency</span>
                         </div>
                         <p className="text-[10px] text-slate-400">
                           Upload high-res executive headshot or browse curated avatar models.
@@ -2705,7 +2789,7 @@ export const AdminDashboard: React.FC = () => {
                       ) : (
                         <Check className="w-4 h-4" />
                       )}
-                      <span>{isCreatingLeader ? 'Creating in Supabase…' : 'Create Team Leader'}</span>
+                      <span>{isCreatingLeader ? 'Creating in Supabase…' : 'Create Agency'}</span>
                     </button>
                   </div>
                 </form>
@@ -2723,7 +2807,7 @@ export const AdminDashboard: React.FC = () => {
                       <Camera className="w-4 h-4" />
                     </div>
                     <div>
-                      <h4 className="font-bold text-white text-sm">Select Team Leader Headshot</h4>
+                      <h4 className="font-bold text-white text-sm">Select Agency Headshot</h4>
                       <p className="text-[11px] text-slate-400">Choose portrait, 3D avatar, or upload high-res image to R2</p>
                     </div>
                   </div>
@@ -2742,13 +2826,13 @@ export const AdminDashboard: React.FC = () => {
                     onImageUploaded={(newUrl) => {
                       setNewLeaderForm((prev) => ({ ...prev, avatarUrl: newUrl }));
                       setIsLeaderAvatarModalOpen(false);
-                      showToast('Picture Selected ✨', 'Avatar applied to Team Leader profile!', 'success');
+                      showToast('Picture Selected ✨', 'Avatar applied to Agency profile!', 'success');
                     }}
                     category="avatar"
                     targetRole="team_leader"
-                    targetName={newLeaderForm.name || 'Team Leader'}
+                    targetName={newLeaderForm.name || 'Agency'}
                     accentColor="amber"
-                    title="Choose Team Leader Avatar"
+                    title="Choose Agency Avatar"
                     subtitle="Executive headshots, 3D avatars, or direct upload to R2."
                     showPresets={true}
                     showUrlInput={true}
@@ -2790,7 +2874,7 @@ export const AdminDashboard: React.FC = () => {
                 <tr>
                   <th className="p-3">ID</th>
                   <th className="p-3">Creator Name</th>
-                  <th className="p-3">Team Leader</th>
+                  <th className="p-3">Agency</th>
                   <th className="p-3">Amount ($)</th>
                   <th className="p-3">Method</th>
                   <th className="p-3">Account Details</th>
@@ -2905,9 +2989,9 @@ export const AdminDashboard: React.FC = () => {
                 value={userTeamLeaderFilter}
                 onChange={(e) => setUserTeamLeaderFilter(e.target.value)}
                 className="w-full sm:w-52 px-2.5 py-1.5 bg-[#0F1115] border border-slate-800 rounded text-xs text-slate-300 focus:outline-none focus:border-amber-500 font-mono cursor-pointer"
-                title="Filter by Team Leader / agency"
+                title="Filter by Agency"
               >
-                <option value="all">All Team Leaders</option>
+                <option value="all">All Agencies</option>
                 <option value="independent">Independent (no TL)</option>
                 {teamLeadersList.map((tl) => (
                   <option key={tl.id} value={tl.id}>
@@ -2925,7 +3009,7 @@ export const AdminDashboard: React.FC = () => {
               { id: 'male_user', label: 'Male Users', count: users.filter((u) => getUserRoleLabel(u) === 'Male User').length, color: 'border-indigo-500/30 bg-indigo-500/10 text-indigo-300' },
               { id: 'female_user', label: 'Female Users', count: users.filter((u) => getFemaleRoleMark(u) === 'user').length, color: 'border-pink-500/30 bg-pink-500/10 text-pink-300' },
               { id: 'female_creator', label: 'Female Creators (TL Hosts)', count: users.filter((u) => getFemaleRoleMark(u) === 'creator').length, color: 'border-rose-500/30 bg-rose-500/10 text-rose-300' },
-              { id: 'team_leader', label: 'Team Leaders', count: users.filter((u) => getUserRoleLabel(u) === 'Team Leader').length, color: 'border-amber-500/30 bg-amber-500/10 text-amber-300' },
+              { id: 'team_leader', label: 'Agencies', count: users.filter((u) => u.role === 'team_leader' || u.role === 'agency_manager').length, color: 'border-amber-500/30 bg-amber-500/10 text-amber-300' },
               { id: 'other_user', label: 'Other Users', count: users.filter((u) => getUserRoleLabel(u) === 'Other User').length, color: 'border-teal-500/30 bg-teal-500/10 text-teal-300' },
               { id: 'admin', label: 'Admins', count: users.filter((u) => getUserRoleLabel(u) === 'Admin').length, color: 'border-purple-500/30 bg-purple-500/10 text-purple-300' },
             ].map((tab) => (
@@ -3011,7 +3095,7 @@ export const AdminDashboard: React.FC = () => {
                               ? 'bg-pink-500/15 text-pink-300 border-pink-500/30'
                               : getUserRoleLabel(u) === 'Male User'
                               ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
-                              : getUserRoleLabel(u) === 'Team Leader'
+                              : u.role === 'team_leader' || u.role === 'agency_manager'
                               ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
                               : getUserRoleLabel(u) === 'Admin'
                               ? 'bg-purple-500/15 text-purple-300 border-purple-500/30'
@@ -3346,6 +3430,8 @@ export const AdminDashboard: React.FC = () => {
       )}
 
       {activeSubTab === 'cms-navigation' && <AdminNavBarEditor />}
+      {activeSubTab === 'cms-payout-cards' && <AdminPayoutCardsCMS />}
+      {activeSubTab === 'office-rbac' && canOffice('office-rbac') && <AdminOfficeRbacPage />}
 
       {/* Sub-Tab: Worldwide Countries, Languages, Zodiac & Interests Control */}
       {activeSubTab === 'countries' && (
@@ -3382,6 +3468,7 @@ export const AdminDashboard: React.FC = () => {
       )}
       {activeSubTab === 'api-health' && <AdminApiHealthPanel />}
       {activeSubTab === 'system-testing' && <AdminSystemTestingPanel />}
+      {activeSubTab === 'k6-load' && canOffice('k6-load') && <AdminK6LoadTestingPanel />}
       {/* Email: OTP / transactional templates, policy, logs */}
       {activeSubTab === 'email' && <AdminEmailPanel />}
 

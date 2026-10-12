@@ -63,7 +63,7 @@ export const ROLE_COLORS: Record<AdminAnalyticsRole, { bg: string; text: string;
     bg: 'bg-amber-500/20',
     text: 'text-amber-300',
     border: 'border-amber-500/30',
-    label: 'Team Leader',
+    label: 'Agency',
   },
   admin: {
     bg: 'bg-slate-500/20',
@@ -840,7 +840,7 @@ export function computeActivityMixByRole(
     male_user: { role: 'male_user', label: 'Male', calls: 0, minutes: 0, coins: 0 },
     female_user: { role: 'female_user', label: 'Regular Female', calls: 0, minutes: 0, coins: 0 },
     female_creator: { role: 'female_creator', label: 'Creator', calls: 0, minutes: 0, coins: 0 },
-    team_leader: { role: 'team_leader', label: 'Team Leader', calls: 0, minutes: 0, coins: 0 },
+    team_leader: { role: 'team_leader', label: 'Agency', calls: 0, minutes: 0, coins: 0 },
     admin: { role: 'admin', label: 'Admin', calls: 0, minutes: 0, coins: 0 },
     other: { role: 'other', label: 'Other', calls: 0, minutes: 0, coins: 0 },
   };

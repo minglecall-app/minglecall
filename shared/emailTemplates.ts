@@ -31,7 +31,7 @@ export const EMAIL_TEMPLATE_LABELS: Record<EmailTemplateKey, string> = {
   otp_register: 'Registration OTP (6-digit)',
   otp_signin: 'Sign-in OTP',
   password_reset: 'Password reset OTP',
-  account_create: 'Account created (admin / team leader)',
+  account_create: 'Account created (admin / agency)',
   account_delete: 'Account deleted notice',
   connection_test: 'Admin connection test',
 };

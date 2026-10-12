@@ -502,7 +502,7 @@ export const AdminEconomyConfigHub: React.FC<AdminEconomyConfigHubProps> = ({
               </p>
             </div>
             <div className="p-4 bg-slate-900/80 border border-indigo-500/30 rounded-2xl space-y-2">
-              <label className="block text-xs font-bold text-indigo-300">Team Leader share (%)</label>
+              <label className="block text-xs font-bold text-indigo-300">Agency share (%)</label>
               <div className="relative">
                 <input
                   id="admin-team-leader-share-percent-input"

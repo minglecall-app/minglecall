@@ -51,6 +51,7 @@ import {
 import {
   ADMIN_NAV_GROUPS,
   AdminNavActionKey,
+  AdminNavGroup,
   AdminNavIconName,
   AdminSubTabKey,
   defaultL2ForTab,
@@ -118,6 +119,8 @@ export interface AdminShellProps {
   /** Optional badge text per L1 id (e.g. live call count). */
   badges?: Partial<Record<AdminSubTabKey | AdminNavActionKey, string | number>>;
   headerKpis?: AdminShellHeaderKpi[];
+  /** When set, replaces default ADMIN_NAV_GROUPS (office RBAC filter). */
+  navGroups?: AdminNavGroup[];
   children: React.ReactNode;
 }
 
@@ -134,8 +137,10 @@ export const AdminShell: React.FC<AdminShellProps> = ({
   onResetData,
   badges,
   headerKpis,
+  navGroups,
   children,
 }) => {
+  const groups = navGroups?.length ? navGroups : ADMIN_NAV_GROUPS;
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem(COLLAPSE_STORAGE_KEY) === '1';
@@ -215,7 +220,7 @@ export const AdminShell: React.FC<AdminShellProps> = ({
 
     return (
       <nav className="flex-1 min-h-0 overflow-y-auto overscroll-contain py-3 px-2 space-y-4 scrollbar-thin">
-        {ADMIN_NAV_GROUPS.map((group) => (
+        {groups.map((group) => (
           <div key={group.id}>
             {!iconOnly && (
               <div className="px-2.5 mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">

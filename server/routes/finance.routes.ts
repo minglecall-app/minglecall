@@ -27,8 +27,13 @@ import {
   loadFinanceSystemConfig,
   updateFinanceSystemConfig,
   markBatchAdminPaid,
+  markPeriodAdminPaid,
+  reconcileBatch,
+  agencyMarkHostPaid,
+  acknowledgePayeeSalary,
   markBatchTlConfirmed,
   cancelSettlementBatch,
+  normalizePayeeSalaryStatus,
   getNextCloseAt,
   getCurrentPeriodBounds,
   checkManualPayoutAllowed,
@@ -39,9 +44,23 @@ import {
   failCheckoutIntent,
   getCoinUsdPeg,
   coinsToUsd,
+  aggregateWalletLedgerEarnings,
+  listSalaryPeriods,
+  loadSalaryPeriodDetail,
+  buildSalaryEstimatePreview,
+  buildSalaryPeriodXlsx,
+  buildSalaryPeriodPdf,
+  resolveEarningsScopeAccess,
+  buildEarningsOverview,
+  buildEarningsLedger,
 } from '../finance';
 import { PAYABLE_MODEL_NOTES, PAYABLE_SOURCE_OF_TRUTH } from '../finance/payableModel';
 import { summarizeHostSettlementLines } from '../../shared/finance/hostEarningsBreakdown';
+import type {
+  EarningsScope,
+  EarningsLedgerMode,
+  EarningsGroupBy,
+} from '../../shared/finance/types';
 
 function authProfileId(req: any): string {
   return String(req.profileId || req.profile?.id || req.user?.id || '').trim();
@@ -83,6 +102,10 @@ function mapBatch(row: any) {
     teamLeaderId: row.team_leader_id ?? null,
     payeeUserId: row.payee_user_id,
     status: row.status,
+    reconcileStatus: row.reconcile_status === 'reconciled' ? 'reconciled' : 'unreconciled',
+    reconciledAt: row.reconciled_at ?? null,
+    reconciledBy: row.reconciled_by ?? null,
+    reconciledByRole: row.reconciled_by_role ?? null,
     totalHostSalaryUsd: Number(row.total_host_salary_usd) || 0,
     totalTlCommissionUsd: Number(row.total_tl_commission_usd) || 0,
     totalDueUsd: Number(row.total_due_usd) || 0,
@@ -93,6 +116,13 @@ function mapBatch(row: any) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function transitionHttpStatus(code?: string) {
+  if (code === 'NOT_FOUND') return 404;
+  if (code === 'FORBIDDEN') return 403;
+  if (code === 'INVALID_TRANSITION' || code === 'RECONCILE_REQUIRED') return 409;
+  return 400;
 }
 
 function mapLineItem(row: any) {
@@ -208,7 +238,14 @@ function extractJobSecret(req: Request): string {
     (req.headers['x-cron-secret'] as string | undefined) ||
     '';
   if (header && String(header).trim()) return String(header).trim();
-  // Do not treat Authorization Bearer as job secret (JWT collision risk).
+  // Vercel Cron sends Authorization: Bearer <CRON_SECRET>. Accept Bearer only when
+  // it exactly matches the configured job secret (avoids treating user JWTs as secrets).
+  const configured = getConfiguredJobSecret();
+  const auth = String(req.headers.authorization || '').trim();
+  if (configured && /^Bearer\s+/i.test(auth)) {
+    const bearer = auth.replace(/^Bearer\s+/i, '').trim();
+    if (bearer && timingSafeEqualString(bearer, configured)) return bearer;
+  }
   const bodySecret = (req.body as any)?.jobSecret || (req.body as any)?.secret;
   if (typeof bodySecret === 'string' && bodySecret.trim()) return bodySecret.trim();
   return '';
@@ -411,9 +448,10 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
 
   // =========================================================================
   // JOBS (cron secret or admin) — keep Phase 3 entrypoints
+  // Vercel Cron invokes GET hourly; admin UI uses POST.
   // =========================================================================
 
-  router.post('/jobs/close-due-periods', requireFinanceJobAuth, sensitiveActionLimiter, async (req, res) => {
+  const handleCloseDuePeriods = async (req: Request, res: Response) => {
     try {
       const body = req.body || {};
       const actorFromAdmin = authProfileId(req) || null;
@@ -457,7 +495,10 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
       console.error('[finance] close-due-periods error:', err?.message || err);
       return sendError(res, 500, err?.message || 'Close job failed', 'CLOSE_DUE_PERIODS_FAILED');
     }
-  });
+  };
+
+  router.get('/jobs/close-due-periods', requireFinanceJobAuth, sensitiveActionLimiter, handleCloseDuePeriods);
+  router.post('/jobs/close-due-periods', requireFinanceJobAuth, sensitiveActionLimiter, handleCloseDuePeriods);
 
   router.post('/jobs/ensure-open-period', requireFinanceJobAuth, sensitiveActionLimiter, async (_req, res) => {
     try {
@@ -557,6 +598,11 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
         (profiles || []).map((p: any) => [String(p.id), { id: p.id, name: p.name, email: p.email }])
       );
 
+      // Ops detail view: raw per-minute / per-event rows (not call-composite).
+      const entries = rows.map((row: any) =>
+        mapLiveWalletLedgerRow(row, profileById.get(String(row.user_id)) || null)
+      );
+
       let callDebitCoins = 0;
       let giftDebitCoins = 0;
       let hostEarnCoins = 0;
@@ -564,9 +610,9 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
       let tlEarnCoins = 0;
       let purchaseCoins = 0;
       let rewardCoins = 0;
-      for (const row of rows) {
-        const t = String(row.transaction_type || '');
-        const amount = Number(row.amount) || 0;
+      for (const row of entries) {
+        const t = String(row.transactionType || '');
+        const amount = Number(row.amountCoins) || 0;
         if (t === 'CALL_DEBIT') callDebitCoins += Math.abs(amount);
         else if (t === 'GIFT_DEBIT') giftDebitCoins += Math.abs(amount);
         else if (t === 'HOST_EARN') hostEarnCoins += Math.max(0, amount);
@@ -600,11 +646,9 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
       };
 
       return sendOk(res, {
-        entries: rows.map((row: any) =>
-          mapLiveWalletLedgerRow(row, profileById.get(String(row.user_id)) || null)
-        ),
+        entries,
         aggregates,
-        pagination: { limit, offset, count: rows.length },
+        pagination: { limit, offset, count: entries.length },
       });
     } catch (err: any) {
       return sendError(
@@ -686,6 +730,42 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
     }
   });
 
+  router.post('/batches/:id/reconcile', requireAdmin, sensitiveActionLimiter, async (req, res) => {
+    try {
+      if (!requireDb(res)) return;
+      const id = String(req.params.id || '').trim();
+      const actorUserId = authProfileId(req);
+      if (!id) return sendError(res, 400, 'Batch id required', 'INVALID_ID');
+      if (!actorUserId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+      const body = req.body || {};
+      const result = await reconcileBatch({
+        batchId: id,
+        actorUserId,
+        actorRole: 'admin',
+        note: typeof body.note === 'string' ? body.note : undefined,
+      });
+      if (!result.success) {
+        return sendError(
+          res,
+          transitionHttpStatus(result.code),
+          result.error || 'Reconcile failed',
+          result.code || 'RECONCILE_FAILED'
+        );
+      }
+      const { data: batch } = await getSupabaseAdmin()!
+        .from('settlement_batches')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      return sendOk(res, {
+        batch: batch ? mapBatch(batch) : null,
+        alreadyReconciled: Boolean(result.alreadyReconciled),
+      });
+    } catch (err: any) {
+      return sendError(res, 500, err?.message || 'Reconcile failed', 'RECONCILE_FAILED');
+    }
+  });
+
   router.post('/batches/:id/admin-mark-paid', requireAdmin, sensitiveActionLimiter, async (req, res) => {
     try {
       if (!requireDb(res)) return;
@@ -705,14 +785,16 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
             : typeof body.payment_reference === 'string'
               ? body.payment_reference
               : undefined,
-        // Product rule: direct hosts paid on admin_paid; TL bundles wait for tl_confirmed
         markHostsPaidNow: false,
       });
 
       if (!result.success) {
-        const status =
-          result.code === 'NOT_FOUND' ? 404 : result.code === 'INVALID_TRANSITION' ? 409 : 400;
-        return sendError(res, status, result.error || 'Mark paid failed', result.code || 'MARK_PAID_FAILED');
+        return sendError(
+          res,
+          transitionHttpStatus(result.code),
+          result.error || 'Mark paid failed',
+          result.code || 'MARK_PAID_FAILED'
+        );
       }
 
       const { data: batch } = await getSupabaseAdmin()!
@@ -1337,30 +1419,43 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
       if (!requireDb(res)) return;
       const client = getSupabaseAdmin()!;
       const periodId = typeof req.query.periodId === 'string' ? req.query.periodId.trim() : '';
+      const now = new Date();
 
-      let periodFilterId = periodId;
-      if (!periodFilterId) {
-        const ensured = await ensureOpenPeriod({ at: new Date() });
-        // Prefer latest closed period for settlement due totals; fall back to current open
+      const ensured = await ensureOpenPeriod({ at: now });
+      const openPeriod = ensured.period;
+      const openPeriodId = openPeriod?.id || null;
+
+      let settlementPeriodId = periodId;
+      let settlementPeriodStatus: string | null = null;
+      if (!settlementPeriodId) {
+        // Prefer latest closed period for settlement books; fall back to current open
         const { data: latestClosed } = await client
           .from('settlement_periods')
-          .select('id')
+          .select('id, status')
           .eq('status', 'closed')
           .order('period_end', { ascending: false })
           .limit(1)
           .maybeSingle();
-        periodFilterId = latestClosed?.id || ensured.period?.id || '';
+        settlementPeriodId = latestClosed?.id || openPeriodId || '';
+        settlementPeriodStatus = latestClosed?.status || openPeriod?.status || null;
+      } else {
+        const { data: selected } = await client
+          .from('settlement_periods')
+          .select('id, status')
+          .eq('id', settlementPeriodId)
+          .maybeSingle();
+        settlementPeriodStatus = selected?.status || null;
       }
 
       let batchesQuery = client.from('settlement_batches').select('*');
-      if (periodFilterId) batchesQuery = batchesQuery.eq('period_id', periodFilterId);
+      if (settlementPeriodId) batchesQuery = batchesQuery.eq('period_id', settlementPeriodId);
       const { data: batches, error: batchesError } = await batchesQuery;
       if (batchesError) return sendError(res, 500, batchesError.message, 'SUMMARY_FAILED');
 
       let ledgerQuery = client
         .from('financial_ledger')
         .select('entry_type, amount_usd, amount_coins');
-      if (periodFilterId) ledgerQuery = ledgerQuery.eq('period_id', periodFilterId);
+      if (settlementPeriodId) ledgerQuery = ledgerQuery.eq('period_id', settlementPeriodId);
       const { data: ledgerRows, error: ledgerError } = await ledgerQuery;
       if (ledgerError) return sendError(res, 500, ledgerError.message, 'SUMMARY_FAILED');
 
@@ -1387,9 +1482,99 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
 
       const outstanding = list.filter((b) => b.status === 'pending_admin_pay');
 
+      // Global remittance queue (all periods) — ops KPI independent of settlement period filter
+      const { data: allPendingBatches, error: pendingError } = await client
+        .from('settlement_batches')
+        .select('id, total_due_usd, batch_kind, status')
+        .eq('status', 'pending_admin_pay');
+      if (pendingError) return sendError(res, 500, pendingError.message, 'SUMMARY_FAILED');
+      const pendingAll = allPendingBatches || [];
+      const outstandingDueUsdAll = pendingAll.reduce(
+        (s, b) => s + (Number(b.total_due_usd) || 0),
+        0
+      );
+
+      const cfg = await loadFinanceSystemConfig();
+      const peg = Number(cfg.coinUsdPeg) || getCoinUsdPeg(cfg);
+      const bounds = getCurrentPeriodBounds(cfg.creatorTargetCycle, now);
+      const nextCloseAtDate = await getNextCloseAt({ at: now, config: cfg });
+      const periodStartIso = bounds.periodStart.toISOString();
+      const periodEndIso = bounds.periodEnd.toISOString();
+      const nextCloseAtIso = nextCloseAtDate.toISOString();
+
+      // Live open-period accruals from wallet_ledger (shows data before first close)
+      let live = {
+        periodId: openPeriodId,
+        periodStart: periodStartIso,
+        periodEnd: periodEndIso,
+        nextCloseAt: nextCloseAtIso,
+        coinUsdPeg: peg,
+        callDebitCoins: 0,
+        giftDebitCoins: 0,
+        hostEarnCoins: 0,
+        tlEarnCoins: 0,
+        targetShareTrueUpCoins: 0,
+        platformRetainedCoins: 0,
+        callDebitUsd: 0,
+        giftDebitUsd: 0,
+        hostPayableUsd: 0,
+        tlPayableUsd: 0,
+        platformRetainedUsd: 0,
+      };
+
+      const accrual = await aggregateWalletLedgerEarnings({
+        periodStart: bounds.periodStart,
+        periodEnd: bounds.periodEnd,
+        client,
+      });
+      if (accrual.success) {
+        const t = accrual.totals;
+        live = {
+          ...live,
+          callDebitCoins: t.callDebitCoins,
+          giftDebitCoins: t.giftDebitCoins,
+          hostEarnCoins: t.hostEarnCoins,
+          tlEarnCoins: t.tlEarnCoins,
+          targetShareTrueUpCoins: t.targetShareTrueUpCoins,
+          platformRetainedCoins: t.platformRetainedCoins,
+          callDebitUsd: coinsToUsd(t.callDebitCoins, peg),
+          giftDebitUsd: coinsToUsd(t.giftDebitCoins, peg),
+          hostPayableUsd: coinsToUsd(t.hostEarnCoins, peg),
+          tlPayableUsd: coinsToUsd(t.tlEarnCoins, peg),
+          platformRetainedUsd: coinsToUsd(t.platformRetainedCoins, peg),
+        };
+      }
+
+      // Funding completed in the open accrual window
+      let fundingCompletedCoins = 0;
+      let fundingPaidUsd = 0;
+      let fundingPegValueUsd = 0;
+      let fundingLoadMarginUsd = 0;
+      let fundingCompletedCount = 0;
+      {
+        const { data: fundingRows, error: fundingError } = await client
+          .from('coin_purchases')
+          .select('amount_coins, amount_usd, peg_value_usd, load_margin_usd, status')
+          .eq('status', 'completed')
+          .gte('created_at', periodStartIso)
+          .lt('created_at', periodEndIso);
+        if (fundingError) return sendError(res, 500, fundingError.message, 'SUMMARY_FAILED');
+        for (const row of fundingRows || []) {
+          fundingCompletedCount += 1;
+          fundingCompletedCoins += Number(row.amount_coins) || 0;
+          fundingPaidUsd += Number(row.amount_usd) || 0;
+          fundingPegValueUsd += Number(row.peg_value_usd) || 0;
+          fundingLoadMarginUsd += Number(row.load_margin_usd) || 0;
+        }
+      }
+
       return sendOk(res, {
-        periodId: periodFilterId || null,
+        periodId: settlementPeriodId || null,
+        settlementPeriodId: settlementPeriodId || null,
+        settlementPeriodStatus,
+        openPeriodId,
         payableSourceOfTruth: PAYABLE_SOURCE_OF_TRUTH,
+        // Backward-compat settlement KPIs (closed books / selected period)
         platformEarnedUsd,
         hostAccruedUsd,
         tlAccruedUsd,
@@ -1403,6 +1588,34 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
           tl_confirmed: list.filter((b) => b.status === 'tl_confirmed').length,
           cancelled: list.filter((b) => b.status === 'cancelled').length,
         },
+        // Overview KPIs
+        live,
+        funding: {
+          periodId: openPeriodId,
+          completedCount: fundingCompletedCount,
+          completedCoins: fundingCompletedCoins,
+          paidUsd: fundingPaidUsd,
+          pegValueUsd: fundingPegValueUsd,
+          loadMarginUsd: fundingLoadMarginUsd,
+        },
+        remittanceAll: {
+          outstandingBatchCount: pendingAll.length,
+          outstandingDueUsd: outstandingDueUsdAll,
+          directHostCount: pendingAll.filter((b) => b.batch_kind === 'direct_host').length,
+          tlBundleCount: pendingAll.filter((b) => b.batch_kind === 'team_leader_bundle').length,
+        },
+        period: {
+          cycleType: cfg.creatorTargetCycle,
+          periodCloseUtcTime: cfg.periodCloseUtcTime,
+          settlementEnabled: cfg.settlementEnabled !== false,
+          coinUsdPeg: peg,
+          periodStart: periodStartIso,
+          periodEnd: periodEndIso,
+          nextCloseAt: nextCloseAtIso,
+          openPeriodId,
+          settlementPeriodId: settlementPeriodId || null,
+          settlementPeriodStatus,
+        },
       });
     } catch (err: any) {
       return sendError(res, 500, err?.message || 'Summary failed', 'SUMMARY_FAILED');
@@ -1412,6 +1625,29 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
   // =========================================================================
   // TEAM LEADER — own batches (amounts allowed)
   // =========================================================================
+
+  router.get('/tl/salary-estimate-preview', requireTeamLeader, async (req, res) => {
+    try {
+      if (!requireDb(res)) return;
+      const tlId = authProfileId(req);
+      if (!tlId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+      const result = await buildSalaryEstimatePreview({
+        scope: 'team_leader',
+        actorUserId: tlId,
+      });
+      if (!result.success || !result.data) {
+        return sendError(
+          res,
+          500,
+          result.error || 'Failed to build salary estimate',
+          'SALARY_ESTIMATE_FAILED'
+        );
+      }
+      return sendOk(res, result.data);
+    } catch (err: any) {
+      return sendError(res, 500, err?.message || 'Failed to build salary estimate', 'SALARY_ESTIMATE_FAILED');
+    }
+  });
 
   router.get('/tl/batches', requireTeamLeader, async (req, res) => {
     try {
@@ -1491,6 +1727,84 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
     }
   });
 
+  router.post('/tl/batches/:id/reconcile', requireTeamLeader, sensitiveActionLimiter, async (req, res) => {
+    try {
+      if (!requireDb(res)) return;
+      const tlId = authProfileId(req);
+      const id = String(req.params.id || '').trim();
+      if (!tlId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+      if (!id) return sendError(res, 400, 'Batch id required', 'INVALID_ID');
+      const body = req.body || {};
+      const result = await reconcileBatch({
+        batchId: id,
+        actorUserId: tlId,
+        actorRole: 'team_leader',
+        note: typeof body.note === 'string' ? body.note : undefined,
+      });
+      if (!result.success) {
+        return sendError(
+          res,
+          transitionHttpStatus(result.code),
+          result.error || 'Reconcile failed',
+          result.code || 'RECONCILE_FAILED'
+        );
+      }
+      const { data: batch } = await getSupabaseAdmin()!
+        .from('settlement_batches')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      return sendOk(res, {
+        batch: batch ? mapBatch(batch) : null,
+        alreadyReconciled: Boolean(result.alreadyReconciled),
+      });
+    } catch (err: any) {
+      return sendError(res, 500, err?.message || 'Reconcile failed', 'RECONCILE_FAILED');
+    }
+  });
+
+  router.post(
+    '/tl/batches/:id/hosts/:hostId/mark-paid',
+    requireTeamLeader,
+    sensitiveActionLimiter,
+    async (req, res) => {
+      try {
+        if (!requireDb(res)) return;
+        const tlId = authProfileId(req);
+        const id = String(req.params.id || '').trim();
+        const hostId = String(req.params.hostId || '').trim();
+        if (!tlId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+        if (!id || !hostId) return sendError(res, 400, 'Batch and host id required', 'INVALID_ID');
+        const body = req.body || {};
+        const result = await agencyMarkHostPaid({
+          batchId: id,
+          hostUserId: hostId,
+          actorUserId: tlId,
+          note: typeof body.note === 'string' ? body.note : undefined,
+        });
+        if (!result.success) {
+          return sendError(
+            res,
+            transitionHttpStatus(result.code),
+            result.error || 'Mark host paid failed',
+            result.code || 'AGENCY_MARK_HOST_PAID_FAILED'
+          );
+        }
+        const { data: batch } = await getSupabaseAdmin()!
+          .from('settlement_batches')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
+        return sendOk(res, {
+          batch: batch ? mapBatch(batch) : null,
+          alreadyPaid: Boolean(result.alreadyPaid),
+        });
+      } catch (err: any) {
+        return sendError(res, 500, err?.message || 'Mark host paid failed', 'AGENCY_MARK_HOST_PAID_FAILED');
+      }
+    }
+  );
+
   router.post('/tl/batches/:id/confirm-received', requireTeamLeader, sensitiveActionLimiter, async (req, res) => {
     try {
       if (!requireDb(res)) return;
@@ -1507,11 +1821,9 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
       });
 
       if (!result.success) {
-        const status =
-          result.code === 'NOT_FOUND' ? 404 : result.code === 'INVALID_TRANSITION' ? 409 : 400;
         return sendError(
           res,
-          status,
+          transitionHttpStatus(result.code),
           result.error || 'Confirm received failed',
           result.code || 'TL_CONFIRM_FAILED'
         );
@@ -1553,8 +1865,178 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
   });
 
   // =========================================================================
+  // ADMIN — Salary periods (period-level salary batches UX)
+  // =========================================================================
+
+  router.get('/admin/salary-estimate-preview', requireAdmin, async (req, res) => {
+    try {
+      if (!requireDb(res)) return;
+      const actorUserId = authProfileId(req);
+      const result = await buildSalaryEstimatePreview({
+        scope: 'admin',
+        actorUserId: actorUserId || 'admin',
+      });
+      if (!result.success || !result.data) {
+        return sendError(
+          res,
+          500,
+          result.error || 'Failed to build salary estimate',
+          'SALARY_ESTIMATE_FAILED'
+        );
+      }
+      return sendOk(res, result.data);
+    } catch (err: any) {
+      return sendError(res, 500, err?.message || 'Failed to build salary estimate', 'SALARY_ESTIMATE_FAILED');
+    }
+  });
+
+  router.get('/admin/salary-periods', requireAdmin, async (req, res) => {
+    try {
+      if (!requireDb(res)) return;
+      const limit = Math.min(Math.max(Number(req.query.limit) || 40, 1), 100);
+      const result = await listSalaryPeriods({ limit });
+      if (!result.success) {
+        return sendError(res, 500, result.error || 'Failed to load salary periods', 'SALARY_PERIODS_FAILED');
+      }
+      return sendOk(res, { periods: result.periods || [] });
+    } catch (err: any) {
+      return sendError(res, 500, err?.message || 'Failed to load salary periods', 'SALARY_PERIODS_FAILED');
+    }
+  });
+
+  router.get('/admin/salary-periods/:periodId', requireAdmin, async (req, res) => {
+    try {
+      if (!requireDb(res)) return;
+      const periodId = String(req.params.periodId || '').trim();
+      if (!periodId) return sendError(res, 400, 'Period id required', 'INVALID_ID');
+      const result = await loadSalaryPeriodDetail(periodId);
+      if (!result.success || !result.data) {
+        const status = String(result.error || '').includes('not found') ? 404 : 500;
+        return sendError(res, status, result.error || 'Failed to load salary period', 'SALARY_PERIOD_FAILED');
+      }
+      return sendOk(res, result.data);
+    } catch (err: any) {
+      return sendError(res, 500, err?.message || 'Failed to load salary period', 'SALARY_PERIOD_FAILED');
+    }
+  });
+
+  router.post(
+    '/admin/salary-periods/:periodId/mark-paid',
+    requireAdmin,
+    sensitiveActionLimiter,
+    async (req, res) => {
+      try {
+        if (!requireDb(res)) return;
+        const periodId = String(req.params.periodId || '').trim();
+        const actorUserId = authProfileId(req);
+        if (!periodId) return sendError(res, 400, 'Period id required', 'INVALID_ID');
+        if (!actorUserId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+
+        const body = req.body || {};
+        const result = await markPeriodAdminPaid({
+          periodId,
+          actorUserId,
+          note: typeof body.note === 'string' ? body.note : undefined,
+          paymentReference:
+            typeof body.paymentReference === 'string'
+              ? body.paymentReference
+              : typeof body.payment_reference === 'string'
+                ? body.payment_reference
+                : undefined,
+        });
+
+        if (!result.success) {
+          const status =
+            result.code === 'NOT_FOUND' ? 404 : result.code === 'INVALID_TRANSITION' ? 409 : 400;
+          return sendError(
+            res,
+            status,
+            result.error || 'Mark period paid failed',
+            result.code || 'PERIOD_MARK_PAID_FAILED'
+          );
+        }
+
+        const detail = await loadSalaryPeriodDetail(periodId);
+        return sendOk(res, {
+          batchesUpdated: result.batchesUpdated ?? 0,
+          alreadyPaid: result.alreadyPaid === true,
+          detail: detail.data ?? null,
+        });
+      } catch (err: any) {
+        return sendError(
+          res,
+          500,
+          err?.message || 'Mark period paid failed',
+          'PERIOD_MARK_PAID_FAILED'
+        );
+      }
+    }
+  );
+
+  router.get('/admin/salary-periods/:periodId/export', requireAdmin, async (req, res) => {
+    try {
+      if (!requireDb(res)) return;
+      const periodId = String(req.params.periodId || '').trim();
+      if (!periodId) return sendError(res, 400, 'Period id required', 'INVALID_ID');
+      const format = String(req.query.format || 'xlsx').trim().toLowerCase();
+
+      if (format === 'pdf') {
+        const built = await buildSalaryPeriodPdf(periodId);
+        if (!built.success || !built.buffer) {
+          return sendError(res, 500, built.error || 'PDF export failed', 'SALARY_EXPORT_FAILED');
+        }
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${built.filename || 'salary.pdf'}"`
+        );
+        return res.status(200).send(built.buffer);
+      }
+
+      const built = await buildSalaryPeriodXlsx(periodId);
+      if (!built.success || !built.buffer) {
+        return sendError(res, 500, built.error || 'Excel export failed', 'SALARY_EXPORT_FAILED');
+      }
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${built.filename || 'salary.xlsx'}"`
+      );
+      return res.status(200).send(built.buffer);
+    } catch (err: any) {
+      return sendError(res, 500, err?.message || 'Export failed', 'SALARY_EXPORT_FAILED');
+    }
+  });
+
+  // =========================================================================
   // HOST — salary status only (NO amounts) + period earnings breakdown (own amounts OK)
   // =========================================================================
+
+  router.get('/host/salary-estimate-preview', requireAuth, async (req, res) => {
+    try {
+      if (!requireDb(res)) return;
+      const hostId = authProfileId(req);
+      if (!hostId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+      const result = await buildSalaryEstimatePreview({
+        scope: 'host',
+        actorUserId: hostId,
+      });
+      if (!result.success || !result.data) {
+        return sendError(
+          res,
+          500,
+          result.error || 'Failed to build salary estimate',
+          'SALARY_ESTIMATE_FAILED'
+        );
+      }
+      return sendOk(res, result.data);
+    } catch (err: any) {
+      return sendError(res, 500, err?.message || 'Failed to build salary estimate', 'SALARY_ESTIMATE_FAILED');
+    }
+  });
 
   router.get('/host/salary-status', requireAuth, async (req, res) => {
     try {
@@ -1598,16 +2080,23 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
       const batchById = new Map((batches || []).map((b: any) => [String(b.id), b]));
       const periodById = new Map((periods || []).map((p: any) => [String(p.id), p]));
 
-      // Aggregate per batch: pending if any host line pending, else paid
+      // Aggregate per batch: worst status across lines (pending < admin_paid < acknowledged)
       const byBatch = new Map<
         string,
-        { salaryStatus: 'pending' | 'paid'; lineCount: number }
+        { salaryStatus: 'unpaid' | 'admin_paid' | 'acknowledged'; lineCount: number }
       >();
       for (const line of lines || []) {
         const bid = String(line.batch_id);
-        const prev = byBatch.get(bid) || { salaryStatus: 'paid' as const, lineCount: 0 };
+        const st = normalizePayeeSalaryStatus(line.host_salary_status);
+        const mapped =
+          st === 'acknowledged' ? 'acknowledged' : st === 'admin_paid' ? 'admin_paid' : 'unpaid';
+        const prev = byBatch.get(bid) || {
+          salaryStatus: 'acknowledged' as const,
+          lineCount: 0,
+        };
         prev.lineCount += 1;
-        if (line.host_salary_status !== 'paid') prev.salaryStatus = 'pending';
+        const rank = { unpaid: 0, admin_paid: 1, acknowledged: 2 } as const;
+        if (rank[mapped] < rank[prev.salaryStatus]) prev.salaryStatus = mapped;
         byBatch.set(bid, prev);
       }
 
@@ -1626,6 +2115,7 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
             batchKind: batch.batch_kind,
             batchStatus: batch.status,
             salaryStatus: agg.salaryStatus,
+            canAcknowledge: agg.salaryStatus === 'admin_paid',
             // Intentionally omit all coin/USD amounts
           };
         })
@@ -1637,6 +2127,49 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
       return sendError(res, 500, err?.message || 'Failed to load salary status', 'HOST_STATUS_FAILED');
     }
   });
+
+  router.post(
+    '/host/salary/:batchId/acknowledge',
+    requireAuth,
+    sensitiveActionLimiter,
+    async (req, res) => {
+      try {
+        if (!requireDb(res)) return;
+        const hostId = authProfileId(req);
+        const batchId = String(req.params.batchId || '').trim();
+        if (!hostId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+        if (!batchId) return sendError(res, 400, 'Batch id required', 'INVALID_ID');
+
+        const body = req.body || {};
+        const result = await acknowledgePayeeSalary({
+          batchId,
+          actorUserId: hostId,
+          note: typeof body.note === 'string' ? body.note : undefined,
+        });
+
+        if (!result.success) {
+          const status =
+            result.code === 'NOT_FOUND'
+              ? 404
+              : result.code === 'FORBIDDEN'
+                ? 403
+                : result.code === 'INVALID_TRANSITION'
+                  ? 409
+                  : 400;
+          return sendError(
+            res,
+            status,
+            result.error || 'Acknowledge failed',
+            result.code || 'HOST_ACK_FAILED'
+          );
+        }
+
+        return sendOk(res, { acknowledged: true, alreadyAcknowledged: result.alreadyPaid === true });
+      } catch (err: any) {
+        return sendError(res, 500, err?.message || 'Acknowledge failed', 'HOST_ACK_FAILED');
+      }
+    }
+  );
 
   /**
    * Own-host period earnings breakdown (call base / true-up / gift / tier bonus).
@@ -1707,9 +2240,14 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
           const periodLines = linesByPeriod.get(pid) || [];
           if (!periodLines.length) return null;
           const breakdown = summarizeHostSettlementLines(periodLines);
-          const salaryStatus = periodLines.some((l) => l.host_salary_status !== 'paid')
-            ? 'pending'
-            : 'paid';
+          const statuses = periodLines.map((l) =>
+            normalizePayeeSalaryStatus(l.host_salary_status)
+          );
+          const salaryStatus = statuses.some((s) => s === 'pending')
+            ? 'unpaid'
+            : statuses.some((s) => s === 'admin_paid')
+              ? 'admin_paid'
+              : 'acknowledged';
           return {
             periodId: pid,
             cycleType: p.cycle_type,
@@ -1732,6 +2270,129 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
         500,
         err?.message || 'Failed to load period earnings',
         'HOST_EARNINGS_FAILED'
+      );
+    }
+  });
+
+  // =========================================================================
+  // Earnings overview + ledger (Platform / TL / Host — role-scoped)
+  // =========================================================================
+
+  router.get('/earnings-overview', requireAuth, async (req, res) => {
+    try {
+      if (!requireDb(res)) return;
+      const scopeRaw = typeof req.query.scope === 'string' ? req.query.scope.trim() : '';
+      if (scopeRaw !== 'platform' && scopeRaw !== 'tl' && scopeRaw !== 'host') {
+        return sendError(res, 400, 'scope must be platform|tl|host', 'INVALID_SCOPE');
+      }
+      const scope = scopeRaw as EarningsScope;
+      const userId =
+        typeof req.query.userId === 'string'
+          ? req.query.userId.trim()
+          : typeof req.query.user_id === 'string'
+            ? req.query.user_id.trim()
+            : '';
+      const teamLeaderId =
+        typeof req.query.teamLeaderId === 'string'
+          ? req.query.teamLeaderId.trim()
+          : typeof req.query.team_leader_id === 'string'
+            ? req.query.team_leader_id.trim()
+            : '';
+
+      const access = await resolveEarningsScopeAccess({
+        scope,
+        actorId: authProfileId(req),
+        actorRole: authRole(req),
+        userId: userId || null,
+        teamLeaderId: teamLeaderId || null,
+      });
+      if (access.ok === false) {
+        return sendError(res, access.status, access.message, access.code);
+      }
+
+      const data = await buildEarningsOverview({
+        scope: access.scope,
+        userIds: access.userIds,
+        teamLeaderId: access.teamLeaderId,
+        client: getSupabaseAdmin(),
+      });
+      return sendOk(res, data);
+    } catch (err: any) {
+      return sendError(
+        res,
+        500,
+        err?.message || 'Failed to load earnings overview',
+        'EARNINGS_OVERVIEW_FAILED'
+      );
+    }
+  });
+
+  router.get('/earnings-ledger', requireAuth, async (req, res) => {
+    try {
+      if (!requireDb(res)) return;
+      const scopeRaw = typeof req.query.scope === 'string' ? req.query.scope.trim() : '';
+      if (scopeRaw !== 'platform' && scopeRaw !== 'tl' && scopeRaw !== 'host') {
+        return sendError(res, 400, 'scope must be platform|tl|host', 'INVALID_SCOPE');
+      }
+      const scope = scopeRaw as EarningsScope;
+      const modeRaw = typeof req.query.mode === 'string' ? req.query.mode.trim() : 'week';
+      if (modeRaw !== 'week' && modeRaw !== 'month' && modeRaw !== 'lifetime') {
+        return sendError(res, 400, 'mode must be week|month|lifetime', 'INVALID_MODE');
+      }
+      const mode = modeRaw as EarningsLedgerMode;
+      const groupByRaw =
+        typeof req.query.groupBy === 'string' ? req.query.groupBy.trim() : 'week';
+      const groupBy = (groupByRaw === 'month' ? 'month' : 'week') as EarningsGroupBy;
+      const periodKey =
+        typeof req.query.periodKey === 'string'
+          ? req.query.periodKey.trim()
+          : typeof req.query.period_key === 'string'
+            ? req.query.period_key.trim()
+            : '';
+      const userId =
+        typeof req.query.userId === 'string'
+          ? req.query.userId.trim()
+          : typeof req.query.user_id === 'string'
+            ? req.query.user_id.trim()
+            : '';
+      const teamLeaderId =
+        typeof req.query.teamLeaderId === 'string'
+          ? req.query.teamLeaderId.trim()
+          : typeof req.query.team_leader_id === 'string'
+            ? req.query.team_leader_id.trim()
+            : '';
+      const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
+
+      const access = await resolveEarningsScopeAccess({
+        scope,
+        actorId: authProfileId(req),
+        actorRole: authRole(req),
+        userId: userId || null,
+        teamLeaderId: teamLeaderId || null,
+      });
+      if (access.ok === false) {
+        return sendError(res, access.status, access.message, access.code);
+      }
+
+      const data = await buildEarningsLedger({
+        scope: access.scope,
+        userIds: access.userIds,
+        mode,
+        groupBy,
+        periodKey: periodKey || null,
+        limit,
+        client: getSupabaseAdmin(),
+      });
+      return sendOk(res, data);
+    } catch (err: any) {
+      if (err?.code === 'INVALID_PERIOD_KEY') {
+        return sendError(res, 400, err.message || 'Invalid periodKey', 'INVALID_PERIOD_KEY');
+      }
+      return sendError(
+        res,
+        500,
+        err?.message || 'Failed to load earnings ledger',
+        'EARNINGS_LEDGER_FAILED'
       );
     }
   });

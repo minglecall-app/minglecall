@@ -43,7 +43,7 @@ export function labelSettlementComponent(component: string): string {
     case 'target_bonus':
       return 'Target cash bonus';
     case 'tl_commission':
-      return 'TL commission';
+      return 'Agency commission';
     default:
       return component.replace(/_/g, ' ');
   }
@@ -58,7 +58,7 @@ export function labelFinancialEntryType(entryType: string): string {
     case 'TARGET_BONUS':
       return 'Target cash bonus';
     case 'TL_EARN':
-      return 'TL commission';
+      return 'Agency commission';
     case 'PLATFORM_EARN':
       return 'Platform retained';
     default:

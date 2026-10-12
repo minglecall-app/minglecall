@@ -122,7 +122,7 @@ export const TeamLeaderKpiBoard: React.FC<TeamLeaderKpiBoardProps> = ({
             <div>
               <div className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-300/90">
                 <Percent className="w-3.5 h-3.5" />
-                TL Earnings
+                Agency Earnings
               </div>
               <div className="mt-2 text-3xl sm:text-4xl font-black font-mono text-amber-300 tracking-tight">
                 {tlLoading ? '…' : `$${tlUsd.toFixed(2)}`}
@@ -160,7 +160,7 @@ export const TeamLeaderKpiBoard: React.FC<TeamLeaderKpiBoardProps> = ({
                     }}
                     formatter={(value: number | string) => [
                       `$${Number(value).toFixed(2)}`,
-                      'TL USD',
+                      'Agency USD',
                     ]}
                     labelFormatter={(_, payload) =>
                       (payload?.[0]?.payload?.label as string) || ''
@@ -169,7 +169,7 @@ export const TeamLeaderKpiBoard: React.FC<TeamLeaderKpiBoardProps> = ({
                   <Area
                     type="monotone"
                     dataKey="tlUsd"
-                    name="TL USD"
+                    name="Agency USD"
                     stroke="#F59E0B"
                     fill={`url(#tlHeroGrad-${uid})`}
                     strokeWidth={2}
