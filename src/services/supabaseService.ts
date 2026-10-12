@@ -2311,6 +2311,49 @@ export async function deleteCmsPolicyFromSupabase(policyIdOrSlug: string): Promi
 // HOME BANNERS & QUICK LINKS API
 // ============================================================================
 
+/** Site SEO & branding singleton — public SELECT. */
+export async function fetchCmsSiteBrandingFromSupabase(): Promise<{
+  id: string;
+  pageTitle: string;
+  metaDescription: string;
+  siteName: string;
+  logoUrl: string;
+  faviconUrl: string;
+  ogImageUrl: string;
+  themeColor: string;
+  updatedAt?: string | null;
+} | null> {
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const { data, error } = await supabase
+      .from('cms_site_branding')
+      .select(
+        'id, page_title, meta_description, site_name, logo_url, favicon_url, og_image_url, theme_color, updated_at'
+      )
+      .eq('id', 'default')
+      .maybeSingle();
+    if (error) {
+      console.warn('Supabase fetchCmsSiteBranding error:', error.message);
+      return null;
+    }
+    if (!data) return null;
+    return {
+      id: String(data.id || 'default'),
+      pageTitle: String(data.page_title || ''),
+      metaDescription: String(data.meta_description || ''),
+      siteName: String(data.site_name || ''),
+      logoUrl: String(data.logo_url || ''),
+      faviconUrl: String(data.favicon_url || ''),
+      ogImageUrl: String(data.og_image_url || ''),
+      themeColor: String(data.theme_color || '#09090C'),
+      updatedAt: data.updated_at ?? null,
+    };
+  } catch (err) {
+    console.warn('Supabase fetchCmsSiteBranding exception:', err);
+    return null;
+  }
+}
+
 /** Active UI feedback rows (toasts/alerts) — public SELECT of active only. */
 export async function fetchUiFeedbackMessagesFromSupabase(): Promise<
   | Array<{

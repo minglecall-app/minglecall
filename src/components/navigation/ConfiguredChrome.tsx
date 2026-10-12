@@ -22,9 +22,12 @@ export function activeNavItems(
 export function BrandLockup({
   item,
   onNavigate,
+  logoUrlFallback,
 }: {
   item?: AppNavItem;
   onNavigate: (tab: string) => void;
+  /** CMS SEO branding logo when nav meta.imageUrl is empty */
+  logoUrlFallback?: string;
 }) {
   const meta = item?.meta || {};
   const mark = meta.markText || 'M';
@@ -33,13 +36,14 @@ export function BrandLockup({
   const showMark = meta.showMark !== false;
   const showWord = meta.showWordmark !== false;
   const target = item?.actionTarget || 'home';
+  const logoSrc = String(meta.imageUrl || logoUrlFallback || '').trim();
   return (
     <div
       className="flex items-center space-x-2 cursor-pointer shrink-0"
       onClick={() => onNavigate(target)}
     >
-      {meta.imageUrl ? (
-        <img src={meta.imageUrl} alt={primary} className="w-8 h-8 rounded-xl object-cover shrink-0" />
+      {logoSrc ? (
+        <img src={logoSrc} alt={primary} className="w-8 h-8 rounded-xl object-cover shrink-0" />
       ) : showMark ? (
         <div className="w-8 h-8 rounded-xl bg-flirt text-white flex items-center justify-center font-display font-bold text-sm shadow-brand shrink-0">
           {mark}

@@ -98,6 +98,7 @@ import { AdminApiHealthPanel } from './AdminApiHealthPanel';
 import { AdminSystemTestingPanel } from './AdminSystemTestingPanel';
 import { AdminK6LoadTestingPanel } from './AdminK6LoadTestingPanel';
 import { AdminToastsMessagesCms } from './AdminToastsMessagesCms';
+import { AdminSeoBrandingCms } from './AdminSeoBrandingCms';
 import { ResetMockDataModal } from './ResetMockDataModal';
 import { AdminTaxonomyManager } from './AdminTaxonomyManager';
 import { AdminCreatorTargetConfig } from './AdminCreatorTargetConfig';
@@ -3433,6 +3434,7 @@ export const AdminDashboard: React.FC = () => {
       {activeSubTab === 'cms-navigation' && <AdminNavBarEditor />}
       {activeSubTab === 'cms-payout-cards' && <AdminPayoutCardsCMS />}
       {activeSubTab === 'cms-toasts' && canOffice('cms-toasts') && <AdminToastsMessagesCms />}
+      {activeSubTab === 'cms-seo' && canOffice('cms-seo') && <AdminSeoBrandingCms />}
       {activeSubTab === 'office-rbac' && canOffice('office-rbac') && <AdminOfficeRbacPage />}
 
       {/* Sub-Tab: Worldwide Countries, Languages, Zodiac & Interests Control */}

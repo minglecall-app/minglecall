@@ -12,6 +12,7 @@ import {
   type AppNavItem,
 } from '../../shared/appNav';
 import { DEFAULT_FEEDBACK_CATALOG } from '../../shared/cms/feedbackCatalog';
+import { DEFAULT_SITE_BRANDING, mapSiteBrandingRow } from '../../shared/cms/siteBranding';
 
 const CMS_ACTION_TYPES = new Set(['tab', 'modal', 'external', 'policy']);
 const POLICY_CATEGORIES = new Set(['safety', 'privacy', 'terms', 'coins', 'creators', 'moderation']);
@@ -826,6 +827,96 @@ export function createCmsAdminRouter(_ctx: ServerRuntime): Router {
       return res.status(500).json({
         success: false,
         error: safeError(err, 'Failed to seed feedback messages'),
+      });
+    }
+  });
+
+  router.get('/cms/seo-branding', requireAdmin, async (_req, res) => {
+    try {
+      if (!requireConfigured(res)) return;
+      const client = getSupabaseAdmin()!;
+      const { data, error } = await client
+        .from('cms_site_branding')
+        .select('*')
+        .eq('id', 'default')
+        .maybeSingle();
+      if (error) {
+        return res.status(500).json({
+          success: false,
+          error: safeError(error.message, 'Failed to load SEO branding'),
+        });
+      }
+      return res.json({
+        success: true,
+        data: mapSiteBrandingRow(data) || { ...DEFAULT_SITE_BRANDING },
+      });
+    } catch (err: any) {
+      console.error('GET /api/admin/cms/seo-branding error:', err);
+      return res.status(500).json({
+        success: false,
+        error: safeError(err, 'Failed to load SEO branding'),
+      });
+    }
+  });
+
+  router.put('/cms/seo-branding', requireAdmin, async (req, res) => {
+    try {
+      if (!requireConfigured(res)) return;
+      const body = req.body || {};
+      const pageTitle = String(body.pageTitle || body.page_title || '').trim();
+      const metaDescription = String(body.metaDescription || body.meta_description || '').trim();
+      const siteName = String(body.siteName || body.site_name || '').trim();
+      if (!pageTitle) {
+        return res.status(400).json({ success: false, error: 'Page title is required' });
+      }
+      if (!metaDescription) {
+        return res.status(400).json({ success: false, error: 'Meta description is required' });
+      }
+      if (!siteName) {
+        return res.status(400).json({ success: false, error: 'Site name is required' });
+      }
+      const logoUrl = String(body.logoUrl ?? body.logo_url ?? '').trim();
+      const faviconUrl = String(body.faviconUrl ?? body.favicon_url ?? '').trim();
+      const ogImageUrl = String(body.ogImageUrl ?? body.og_image_url ?? '').trim();
+      const themeColor = String(body.themeColor ?? body.theme_color ?? '#09090C').trim() || '#09090C';
+      for (const [label, url] of [
+        ['logoUrl', logoUrl],
+        ['faviconUrl', faviconUrl],
+        ['ogImageUrl', ogImageUrl],
+      ] as const) {
+        if (url && !url.startsWith('/') && !isSafeHttpUrl(url)) {
+          return res.status(400).json({ success: false, error: `Invalid ${label} URL` });
+        }
+      }
+      const row = {
+        id: 'default',
+        page_title: pageTitle.slice(0, 200),
+        meta_description: metaDescription.slice(0, 500),
+        site_name: siteName.slice(0, 80),
+        logo_url: logoUrl || null,
+        favicon_url: faviconUrl || null,
+        og_image_url: ogImageUrl || null,
+        theme_color: themeColor.slice(0, 32),
+        updated_at: new Date().toISOString(),
+      };
+      const client = getSupabaseAdmin()!;
+      const { data, error } = await client
+        .from('cms_site_branding')
+        .upsert(row, { onConflict: 'id' })
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        return res.status(500).json({
+          success: false,
+          error: safeError(error.message, 'Failed to save SEO branding'),
+        });
+      }
+      return res.json({ success: true, data: mapSiteBrandingRow(data) });
+    } catch (err: any) {
+      console.error('PUT /api/admin/cms/seo-branding error:', err);
+      return res.status(500).json({
+        success: false,
+        error: safeError(err, 'Failed to save SEO branding'),
       });
     }
   });

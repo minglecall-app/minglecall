@@ -50,6 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
     missedCallsCount,
     markCallLogsSeen,
     appNavItems,
+    siteBranding,
   } = useApp();
   const [showPersonaMenu, setShowPersonaMenu] = useState(false);
   const personaMenuRef = useRef<HTMLDivElement>(null);
@@ -119,7 +120,13 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Left Side: Brand Logo + Home & Admin Navigation */}
           <div className="flex items-center space-x-3 sm:space-x-4 min-w-0">
             {/* Brand Logo & Name */}
-            {showBrand && <BrandLockup item={brandItem} onNavigate={handleNav} />}
+            {showBrand && (
+              <BrandLockup
+                item={brandItem}
+                onNavigate={handleNav}
+                logoUrlFallback={siteBranding?.logoUrl}
+              />
+            )}
 
             {isLoggedIn && <HeaderLeftButtons items={leftNav} ctx={navCtx} />}
           </div>

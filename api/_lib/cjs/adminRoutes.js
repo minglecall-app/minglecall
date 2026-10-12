@@ -1067,6 +1067,94 @@ async function handleAdmin(path, req, res) {
     });
   }
 
+  if (path === 'admin/cms/seo-branding' && req.method === 'GET') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const { data, error } = await auth.client
+      .from('cms_site_branding')
+      .select('*')
+      .eq('id', 'default')
+      .maybeSingle();
+    if (error) return send(res, 500, { success: false, error: error.message });
+    const row = data || {};
+    return send(res, 200, {
+      success: true,
+      data: {
+        id: row.id || 'default',
+        pageTitle: row.page_title || 'LiveCall - 1-on-1 Video & Monetization',
+        metaDescription:
+          row.meta_description ||
+          'Live 1-on-1 video calling, creator monetization, interactive matching, and discovery platform.',
+        siteName: row.site_name || 'LiveCall',
+        logoUrl: row.logo_url || '',
+        faviconUrl: row.favicon_url || '/pwa-icon.svg',
+        ogImageUrl: row.og_image_url || '',
+        themeColor: row.theme_color || '#09090C',
+        updatedAt: row.updated_at ?? null,
+      },
+    });
+  }
+
+  if (path === 'admin/cms/seo-branding' && req.method === 'PUT') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const body = (await readJsonBody(req)) || {};
+    const pageTitle = String(body.pageTitle || body.page_title || '').trim();
+    const metaDescription = String(body.metaDescription || body.meta_description || '').trim();
+    const siteName = String(body.siteName || body.site_name || '').trim();
+    if (!pageTitle) return send(res, 400, { success: false, error: 'Page title is required' });
+    if (!metaDescription) return send(res, 400, { success: false, error: 'Meta description is required' });
+    if (!siteName) return send(res, 400, { success: false, error: 'Site name is required' });
+    const logoUrl = String(body.logoUrl ?? body.logo_url ?? '').trim();
+    const faviconUrl = String(body.faviconUrl ?? body.favicon_url ?? '').trim();
+    const ogImageUrl = String(body.ogImageUrl ?? body.og_image_url ?? '').trim();
+    const themeColor = String(body.themeColor ?? body.theme_color ?? '#09090C').trim() || '#09090C';
+    const isSafe = (url) => {
+      if (!url) return true;
+      if (url.startsWith('/')) return true;
+      try {
+        const u = new URL(url);
+        return u.protocol === 'http:' || u.protocol === 'https:';
+      } catch {
+        return false;
+      }
+    };
+    if (!isSafe(logoUrl) || !isSafe(faviconUrl) || !isSafe(ogImageUrl)) {
+      return send(res, 400, { success: false, error: 'Invalid image URL' });
+    }
+    const row = {
+      id: 'default',
+      page_title: pageTitle.slice(0, 200),
+      meta_description: metaDescription.slice(0, 500),
+      site_name: siteName.slice(0, 80),
+      logo_url: logoUrl || null,
+      favicon_url: faviconUrl || null,
+      og_image_url: ogImageUrl || null,
+      theme_color: themeColor.slice(0, 32),
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await auth.client
+      .from('cms_site_branding')
+      .upsert(row, { onConflict: 'id' })
+      .select('*')
+      .maybeSingle();
+    if (error) return send(res, 500, { success: false, error: error.message });
+    return send(res, 200, {
+      success: true,
+      data: {
+        id: data.id || 'default',
+        pageTitle: data.page_title || pageTitle,
+        metaDescription: data.meta_description || metaDescription,
+        siteName: data.site_name || siteName,
+        logoUrl: data.logo_url || '',
+        faviconUrl: data.favicon_url || '/pwa-icon.svg',
+        ogImageUrl: data.og_image_url || '',
+        themeColor: data.theme_color || '#09090C',
+        updatedAt: data.updated_at ?? null,
+      },
+    });
+  }
+
   if (
     (path === 'admin/cms/banners' ||
       path === 'admin/cms/policies' ||

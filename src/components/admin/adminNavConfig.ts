@@ -25,6 +25,7 @@ export type AdminSubTabKey =
   | 'cms-navigation'
   | 'cms-payout-cards'
   | 'cms-toasts'
+  | 'cms-seo'
   | 'office-rbac';
 
 /** Non-tab sidebar actions (Setup Wizard / Reset Data). */
@@ -301,6 +302,13 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         icon: 'MessageSquare',
         kind: 'tab',
         title: 'Edit app toast, alert, and feedback copy',
+      },
+      {
+        id: 'cms-seo',
+        label: 'SEO & branding',
+        icon: 'Globe',
+        kind: 'tab',
+        title: 'Page title, meta description, logo, and favicon',
       },
     ],
   },

@@ -138,6 +138,7 @@ export const OFFICE_FEATURES: OfficeFeatureDef[] = [
   { key: 'cms-navigation', label: 'Navigation Editor', group: 'CMS', kind: 'tab' },
   { key: 'cms-payout-cards', label: 'Payout / Bank Cards', group: 'CMS', kind: 'tab' },
   { key: 'cms-toasts', label: 'Toasts & messages', group: 'CMS', kind: 'tab' },
+  { key: 'cms-seo', label: 'SEO & branding', group: 'CMS', kind: 'tab' },
   { key: 'setup-wizard', label: 'Setup Wizard GUI', group: 'Actions', kind: 'action' },
   { key: 'reset-data', label: 'Reset Data', group: 'Actions', kind: 'action' },
 ];

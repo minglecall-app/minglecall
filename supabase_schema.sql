@@ -790,6 +790,55 @@ CREATE POLICY "admin write ui_feedback_messages" ON public.ui_feedback_messages
     )
   );
 
+-- Site-wide SEO & branding (Admin → CMS → SEO & branding). Singleton row id = 'default'.
+CREATE TABLE IF NOT EXISTS public.cms_site_branding (
+    id TEXT PRIMARY KEY DEFAULT 'default',
+    page_title TEXT NOT NULL DEFAULT 'LiveCall - 1-on-1 Video & Monetization',
+    meta_description TEXT NOT NULL DEFAULT 'Live 1-on-1 video calling, creator monetization, interactive matching, and discovery platform.',
+    site_name TEXT NOT NULL DEFAULT 'LiveCall',
+    logo_url TEXT,
+    favicon_url TEXT,
+    og_image_url TEXT,
+    theme_color TEXT NOT NULL DEFAULT '#09090C',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.cms_site_branding ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "public select cms_site_branding" ON public.cms_site_branding;
+DROP POLICY IF EXISTS "admin write cms_site_branding" ON public.cms_site_branding;
+CREATE POLICY "public select cms_site_branding" ON public.cms_site_branding
+  FOR SELECT USING (true);
+CREATE POLICY "admin write cms_site_branding" ON public.cms_site_branding
+  FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.role = 'admin'
+        AND (p.auth_id = auth.uid() OR p.id = auth.uid()::text)
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.role = 'admin'
+        AND (p.auth_id = auth.uid() OR p.id = auth.uid()::text)
+    )
+  );
+
+INSERT INTO public.cms_site_branding (
+  id, page_title, meta_description, site_name, logo_url, favicon_url, og_image_url, theme_color
+) VALUES (
+  'default',
+  'LiveCall - 1-on-1 Video & Monetization',
+  'Live 1-on-1 video calling, creator monetization, interactive matching, and discovery platform.',
+  'LiveCall',
+  NULL,
+  '/pwa-icon.svg',
+  NULL,
+  '#09090C'
+) ON CONFLICT (id) DO NOTHING;
+
 -- Default homepage CMS content for fresh databases (safe to re-run).
 INSERT INTO public.home_banners (
   id, title, subtitle, badge, cta_text, tag_color, image_url,

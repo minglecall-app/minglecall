@@ -86,6 +86,7 @@ import {
   updateSystemConfigsInSupabase,
   fetchHomeBannersFromSupabase,
   fetchUiFeedbackMessagesFromSupabase,
+  fetchCmsSiteBrandingFromSupabase,
   fetchCmsPoliciesFromSupabase,
   fetchHomeQuickLinksFromSupabase,
   fetchAppNavItemsFromSupabase,
@@ -122,6 +123,12 @@ import {
   type FeedbackCatalogEntry,
   type FeedbackType,
 } from '../../shared/cms/feedbackCatalog';
+import {
+  DEFAULT_SITE_BRANDING,
+  applySiteBrandingToDocument,
+  mapSiteBrandingRow,
+  type SiteBranding,
+} from '../../shared/cms/siteBranding';
 import {
   updateUserPassword,
   signOutSupabase,
@@ -233,6 +240,10 @@ interface AppContextType {
     key: string,
     opts?: { type?: FeedbackType; vars?: Record<string, string | number | null | undefined> }
   ) => void;
+
+  // CMS SEO & branding
+  siteBranding: SiteBranding;
+  reloadSiteBranding: () => Promise<void>;
 
   // Handlers
   showToast: (title: string, message: string, type?: 'success' | 'error' | 'info' | 'warning') => void;
@@ -613,6 +624,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [feedbackCatalog, setFeedbackCatalog] = useState<FeedbackCatalogEntry[]>(() => [
     ...DEFAULT_FEEDBACK_CATALOG,
   ]);
+  const [siteBranding, setSiteBranding] = useState<SiteBranding>(() => ({ ...DEFAULT_SITE_BRANDING }));
   const feedbackCatalogRef = useRef<FeedbackCatalogEntry[]>(DEFAULT_FEEDBACK_CATALOG);
   const feedbackFingerprintIndexRef = useRef<Map<string, string>>(
     buildDefaultFingerprintIndex(DEFAULT_FEEDBACK_CATALOG)
@@ -3168,6 +3180,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         })
         .catch((e) => console.warn('Feedback catalog hydrate failed:', e));
 
+      fetchCmsSiteBrandingFromSupabase()
+        .then((row) => {
+          if (row === null) return;
+          setSiteBranding(mapSiteBrandingRow(row));
+        })
+        .catch((e) => console.warn('Site branding hydrate failed:', e));
+
       fetchCmsPoliciesFromSupabase()
         .then((policies) => {
           if (policies === null) return;
@@ -4723,6 +4742,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       console.warn('reloadFeedbackCatalog failed:', e);
     }
   };
+
+  const reloadSiteBranding = async () => {
+    try {
+      const row = await fetchCmsSiteBrandingFromSupabase();
+      if (row === null) return;
+      setSiteBranding(mapSiteBrandingRow(row));
+    } catch (e) {
+      console.warn('reloadSiteBranding failed:', e);
+    }
+  };
+
+  useEffect(() => {
+    applySiteBrandingToDocument(siteBranding);
+  }, [siteBranding]);
 
   const switchUser = (_userOrId: string | UserProfile) => {
     showToast('Sign in required', 'Account switching without a password is disabled. Use email and password.', 'error');
@@ -10391,6 +10424,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         reloadFeedbackCatalog,
         resolveFeedback: resolveFeedbackCopy,
         showToastKey,
+        siteBranding,
+        reloadSiteBranding,
         showToast,
         hideToast,
         switchUser,
