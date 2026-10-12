@@ -85,6 +85,7 @@ import {
   fetchSystemConfigsFromSupabase,
   updateSystemConfigsInSupabase,
   fetchHomeBannersFromSupabase,
+  fetchUiFeedbackMessagesFromSupabase,
   fetchCmsPoliciesFromSupabase,
   fetchHomeQuickLinksFromSupabase,
   fetchAppNavItemsFromSupabase,
@@ -111,6 +112,16 @@ import {
   mapDbProfileToUserProfile,
 } from '../services/supabaseService';
 import { parseDiscoveryCardLayout } from '../../shared/discoveryCardLayout';
+import {
+  DEFAULT_FEEDBACK_CATALOG,
+  applyFeedbackVars,
+  buildDefaultFingerprintIndex,
+  feedbackFingerprint,
+  mergeFeedbackCatalog,
+  resolveFeedback,
+  type FeedbackCatalogEntry,
+  type FeedbackType,
+} from '../../shared/cms/feedbackCatalog';
 import {
   updateUserPassword,
   signOutSupabase,
@@ -210,6 +221,18 @@ interface AppContextType {
     slot?: string | null;
     items: AppNavItem[];
   }) => Promise<{ success: boolean; error?: string }>;
+
+  // CMS feedback catalog (toasts / alerts)
+  feedbackCatalog: FeedbackCatalogEntry[];
+  reloadFeedbackCatalog: () => Promise<void>;
+  resolveFeedback: (
+    key: string,
+    vars?: Record<string, string | number | null | undefined>
+  ) => ReturnType<typeof resolveFeedback>;
+  showToastKey: (
+    key: string,
+    opts?: { type?: FeedbackType; vars?: Record<string, string | number | null | undefined> }
+  ) => void;
 
   // Handlers
   showToast: (title: string, message: string, type?: 'success' | 'error' | 'info' | 'warning') => void;
@@ -587,6 +610,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Home Banners, Policies & Quick Links — authoritative source is Supabase (not localStorage).
   // Start with built-in defaults so a fresh/empty DB never blanks the hero & shortcuts.
   const [homeBanners, setHomeBanners] = useState<HomeBanner[]>(() => [...INITIAL_HOME_BANNERS]);
+  const [feedbackCatalog, setFeedbackCatalog] = useState<FeedbackCatalogEntry[]>(() => [
+    ...DEFAULT_FEEDBACK_CATALOG,
+  ]);
+  const feedbackCatalogRef = useRef<FeedbackCatalogEntry[]>(DEFAULT_FEEDBACK_CATALOG);
+  const feedbackFingerprintIndexRef = useRef<Map<string, string>>(
+    buildDefaultFingerprintIndex(DEFAULT_FEEDBACK_CATALOG)
+  );
+  const feedbackByKeyRef = useRef<Map<string, FeedbackCatalogEntry>>(
+    new Map(DEFAULT_FEEDBACK_CATALOG.map((e) => [e.key, e]))
+  );
   const [policyDocuments, setPolicyDocuments] = useState<PolicyDocument[]>(() => [...INITIAL_POLICY_DOCUMENTS]);
   const [homeQuickLinks, setHomeQuickLinks] = useState<HomeQuickLink[]>(() => [...INITIAL_HOME_QUICK_LINKS]);
   const [appNavItems, setAppNavItems] = useState<AppNavItem[]>(() => mergeNavWithDefaults([]));
@@ -838,6 +871,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const showToastRef = useRef<(title: string, message: string, type?: 'success' | 'error' | 'info' | 'warning') => void>(
     () => {}
   );
+  const showToastKeyRef = useRef<
+    (
+      key: string,
+      opts?: { type?: FeedbackType; vars?: Record<string, string | number | null | undefined> }
+    ) => void
+  >(() => {});
   const logoutUserRef = useRef<(opts?: { reason?: 'manual' | 'other_device' }) => void>(() => {});
   const sessionKickInFlightRef = useRef(false);
   const sessionKickPendingRef = useRef(false);
@@ -3121,6 +3160,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         })
         .catch((e) => console.warn('Home banners hydrate failed:', e));
 
+      fetchUiFeedbackMessagesFromSupabase()
+        .then((rows) => {
+          if (rows === null) return;
+          const merged = mergeFeedbackCatalog(DEFAULT_FEEDBACK_CATALOG, rows);
+          setFeedbackCatalog(merged);
+        })
+        .catch((e) => console.warn('Feedback catalog hydrate failed:', e));
+
       fetchCmsPoliciesFromSupabase()
         .then((policies) => {
           if (policies === null) return;
@@ -4029,7 +4076,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 startTime: new Date(startTime || Date.now()).toISOString(),
               }),
             }).catch(() => {});
-            showToast('Call Connected! 📹', '1-on-1 WebRTC Video Call connected live.', 'success');
+            showToastKeyRef.current('calls.call_connected');
           } else if (data.type === 'call:ended' || data.type === 'call:end' || data.type === 'call:cancel' || data.type === 'call:reject') {
             const endedId = String(data.callId || activeCallRef.current?.id || '').trim();
             const outcomeStatus = String(data.outcome || data.status || 'completed');
@@ -4044,7 +4091,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             if (data.code === 'INSUFFICIENT_BALANCE' || data.reason === 'INSUFFICIENT_BALANCE') {
               if (!insufficientEndToastShownRef.current) {
                 insufficientEndToastShownRef.current = true;
-                showToast('Call Ended', 'Call ended due to insufficient coin balance. Please recharge.', 'error');
+                showToastKeyRef.current('calls.call_ended', { type: 'error' });
               }
             } else if (data.endedBy === 'admin_moderator' || outcomeStatus === 'terminated') {
               showToast(
@@ -4094,7 +4141,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             });
           } else if (data.type === 'call:failed') {
             setActiveCall(null);
-            showToast('Call Unavailable 🚫', data.reason || 'User is offline or unavailable.', 'error');
+            showToastKeyRef.current('calls.unavailable_detail', {
+              vars: { detail: data.reason || 'User is offline or unavailable.' },
+            });
           } else if (data.type === 'call_logs:updated') {
             // Refresh platform/admin financial KPIs from authoritative DB call_logs
             if (isSupabaseConfigured()) {
@@ -4225,7 +4274,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 });
 
                 if (myUid === receiverId) {
-                  showToast('🎉 Mutual Match!', `${otherUser.name} matched with you in Quick Match!`, 'success');
+                  showToastKeyRef.current('match.mutual_quick', { vars: { name: otherUser.name } });
                 }
               }
             }
@@ -4595,6 +4644,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const toastTimerRef = useRef<any>(null);
 
+  useEffect(() => {
+    feedbackCatalogRef.current = feedbackCatalog;
+    feedbackByKeyRef.current = new Map(feedbackCatalog.map((e) => [e.key, e]));
+  }, [feedbackCatalog]);
+
   const hideToast = () => {
     if (toastTimerRef.current) {
       clearTimeout(toastTimerRef.current);
@@ -4603,7 +4657,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setToast(null);
   };
 
-  const showToast = (title: string, message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info') => {
+  const pushToast = (
+    title: string,
+    message: string,
+    type: 'success' | 'error' | 'info' | 'warning' = 'info'
+  ) => {
     if (toastTimerRef.current) {
       clearTimeout(toastTimerRef.current);
     }
@@ -4614,7 +4672,57 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       toastTimerRef.current = null;
     }, 3000);
   };
+
+  /** Static title+message call sites: overlay CMS copy via default fingerprint → key. */
+  const showToast = (
+    title: string,
+    message: string,
+    type: 'success' | 'error' | 'info' | 'warning' = 'info'
+  ) => {
+    const key = feedbackFingerprintIndexRef.current.get(feedbackFingerprint(title, message));
+    if (key) {
+      const entry = feedbackByKeyRef.current.get(key);
+      if (entry) {
+        pushToast(entry.title, entry.message, type || entry.defaultType);
+        return;
+      }
+    }
+    pushToast(title, message, type);
+  };
   showToastRef.current = showToast;
+
+  const showToastKey = (
+    key: string,
+    opts?: { type?: FeedbackType; vars?: Record<string, string | number | null | undefined> }
+  ) => {
+    const entry = feedbackByKeyRef.current.get(key);
+    if (entry) {
+      pushToast(
+        applyFeedbackVars(entry.title, opts?.vars),
+        applyFeedbackVars(entry.message, opts?.vars),
+        opts?.type || entry.defaultType
+      );
+      return;
+    }
+    const fallback = resolveFeedback(key, opts?.vars, DEFAULT_FEEDBACK_CATALOG);
+    pushToast(fallback.title, fallback.message, opts?.type || fallback.type);
+  };
+  showToastKeyRef.current = showToastKey;
+
+  const resolveFeedbackCopy = (
+    key: string,
+    vars?: Record<string, string | number | null | undefined>
+  ) => resolveFeedback(key, vars, feedbackCatalogRef.current);
+
+  const reloadFeedbackCatalog = async () => {
+    try {
+      const rows = await fetchUiFeedbackMessagesFromSupabase();
+      if (rows === null) return;
+      setFeedbackCatalog(mergeFeedbackCatalog(DEFAULT_FEEDBACK_CATALOG, rows));
+    } catch (e) {
+      console.warn('reloadFeedbackCatalog failed:', e);
+    }
+  };
 
   const switchUser = (_userOrId: string | UserProfile) => {
     showToast('Sign in required', 'Account switching without a password is disabled. Use email and password.', 'error');
@@ -4827,7 +4935,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         'warning'
       );
     } else {
-      showToast('Logged Out 👋', 'You have been safely logged out of your session.', 'info');
+      showToastKey('auth.logged_out');
     }
     sessionKickInFlightRef.current = false;
   };
@@ -5157,7 +5265,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return false;
       }
       if (!silentSuccess) {
-        showToast('Profile Updated', 'Changes saved successfully', 'success');
+        showToastKey('profile.profile_updated');
       }
       return true;
     });
@@ -5290,11 +5398,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     // Check if user is offline or busy
     if (receiver.onlineStatus === 'offline') {
-      showToast('User Offline 🚫', `${receiver.name} is currently offline. Calls can only be placed when online.`, 'warning');
+      showToastKey('calls.user_offline', { vars: { name: receiver.name } });
       return false;
     }
     if (receiver.onlineStatus === 'busy' || receiver.onlineStatus === 'in_call') {
-      showToast('User Busy 🚫', `${receiver.name} is currently busy on another video call.`, 'warning');
+      showToastKey('calls.user_busy', { vars: { name: receiver.name } });
       return false;
     }
 
@@ -5432,7 +5540,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const call = activeCallRef.current;
           if (call && call.id === callId && call.status === 'ringing') {
             ringTimedOutRef.current = true;
-            showToast('Call Missed', 'No answer — ring timed out.', 'info');
+            showToastKey('calls.call_missed', { type: 'info' });
             endCallRef.current();
           }
         }, ringMs);
@@ -5466,11 +5574,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                   const ts = row.started_at || row.start_time;
                   const startMs = ts ? new Date(ts).getTime() : Date.now();
                   activateCallLocally(Number.isFinite(startMs) ? startMs : Date.now());
-                  showToast(
-                    'Call Connected! 📹',
-                    '1-on-1 WebRTC Video Call connected live.',
-                    'success'
-                  );
+                  showToastKey('calls.call_connected');
                 } else if (
                   // Only peer/explicit ring outcomes — not "completed"/"ended"
                   // (those can race from presence cleanup and falsely hang up at ~2s).
@@ -6341,7 +6445,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (!gift) return false;
 
     if (currentUser.coinBalance < gift.coinCost) {
-      showToast('Insufficient Coins 🪙', `Sending ${gift.name} requires ${gift.coinCost} coins. Please buy coins!`, 'error');
+      showToastKey('wallet.gift_insufficient', {
+        vars: { gift: gift.name, amount: gift.coinCost },
+      });
       return false;
     }
 
@@ -8399,7 +8505,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     if (isFriend(targetUser.id)) {
-      showToast('Already Friends 👥', `You and ${targetUser.name} are already connected as friends!`, 'info');
+      showToastKey('social.already_friends', { vars: { name: targetUser.name } });
       return false;
     }
 
@@ -8407,7 +8513,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       (r) => r.senderId === currentUser.id && r.receiverId === targetUser.id && r.status === 'pending'
     );
     if (existing) {
-      showToast('Request Pending ⏳', `Friend request already sent to ${targetUser.name}. Waiting for approval.`, 'info');
+      showToastKey('social.friend_pending', { vars: { name: targetUser.name } });
       return false;
     }
 
@@ -8649,7 +8755,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         )
       );
 
-      showToast('User Blocked 🚫', `User has been blocked. Reason: ${reason}`, 'warning');
+      showToastKey('social.user_blocked', { vars: { detail: reason } });
       return true;
     } catch (err: any) {
       console.warn('blockUser error:', err);
@@ -8780,7 +8886,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       };
     });
 
-    showToast('Goal Contribution Sent! 🎉', `Dropped ${coins} 🪙 into creator goal target!`, 'success');
+    showToastKey('wallet.goal_contribution', { vars: { amount: coins } });
     return true;
   };
 
@@ -9017,7 +9123,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return false;
       }
 
-      showToast('Quest Completed! ✨', `+${coins} Free Coins earned from daily mission!`, 'success');
+      showToastKey('wallet.quest_completed', { vars: { amount: coins } });
       return true;
     } catch (err) {
       console.warn('[AppContext] claimDailyMission error:', err);
@@ -9056,7 +9162,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return false;
       }
 
-      showToast('🏆 Master Chest Unlocked!', `+${coins} Mega Bonus Coins added to your wallet!`, 'success');
+      showToastKey('wallet.master_chest', { vars: { amount: coins } });
       return true;
     } catch (err) {
       console.warn('[AppContext] claimDailyMasterChest error:', err);
@@ -10281,6 +10387,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         deleteHomeQuickLink,
         seedHomeCmsDefaults,
         saveAppNavSlice,
+        feedbackCatalog,
+        reloadFeedbackCatalog,
+        resolveFeedback: resolveFeedbackCopy,
+        showToastKey,
         showToast,
         hideToast,
         switchUser,

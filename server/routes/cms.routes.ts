@@ -11,6 +11,7 @@ import {
   validateNavSlice,
   type AppNavItem,
 } from '../../shared/appNav';
+import { DEFAULT_FEEDBACK_CATALOG } from '../../shared/cms/feedbackCatalog';
 
 const CMS_ACTION_TYPES = new Set(['tab', 'modal', 'external', 'policy']);
 const POLICY_CATEGORIES = new Set(['safety', 'privacy', 'terms', 'coins', 'creators', 'moderation']);
@@ -677,6 +678,155 @@ export function createCmsAdminRouter(_ctx: ServerRuntime): Router {
     } catch (err: any) {
       console.error('POST /api/admin/cms/seed-defaults error:', err);
       return res.status(500).json({ success: false, error: safeError(err, 'Failed to seed CMS defaults') });
+    }
+  });
+
+  const FEEDBACK_KINDS = new Set(['toast', 'alert', 'modal', 'inline']);
+  const FEEDBACK_TYPES = new Set(['success', 'error', 'info', 'warning']);
+
+  function mapFeedbackRow(row: any) {
+    return {
+      key: row.key,
+      kind: row.kind || 'toast',
+      category: row.category || 'general',
+      title: row.title || '',
+      message: row.message || '',
+      defaultType: row.default_type || 'info',
+      active: row.active !== false,
+      updatedAt: row.updated_at ?? null,
+    };
+  }
+
+  router.get('/cms/feedback', requireAdmin, async (_req, res) => {
+    try {
+      if (!requireConfigured(res)) return;
+      const client = getSupabaseAdmin()!;
+      const { data, error } = await client
+        .from('ui_feedback_messages')
+        .select('*')
+        .order('key', { ascending: true });
+      if (error) {
+        return res.status(500).json({
+          success: false,
+          error: safeError(error.message, 'Failed to load feedback messages'),
+        });
+      }
+      return res.json({
+        success: true,
+        data: {
+          rows: (data || []).map(mapFeedbackRow),
+          defaultsCount: DEFAULT_FEEDBACK_CATALOG.length,
+        },
+      });
+    } catch (err: any) {
+      console.error('GET /api/admin/cms/feedback error:', err);
+      return res.status(500).json({
+        success: false,
+        error: safeError(err, 'Failed to load feedback messages'),
+      });
+    }
+  });
+
+  router.put('/cms/feedback', requireAdmin, async (req, res) => {
+    try {
+      if (!requireConfigured(res)) return;
+      const body = req.body || {};
+      const key = String(body.key || '').trim();
+      if (!key || key.length > 120) {
+        return res.status(400).json({ success: false, error: 'Valid key is required' });
+      }
+      const kind = String(body.kind || 'toast');
+      const defaultType = String(body.defaultType || body.default_type || 'info');
+      if (!FEEDBACK_KINDS.has(kind)) {
+        return res.status(400).json({ success: false, error: 'Invalid kind' });
+      }
+      if (!FEEDBACK_TYPES.has(defaultType)) {
+        return res.status(400).json({ success: false, error: 'Invalid defaultType' });
+      }
+      const title = String(body.title || '').trim();
+      const message = String(body.message ?? '');
+      if (!title) {
+        return res.status(400).json({ success: false, error: 'Title is required' });
+      }
+      const row = {
+        key,
+        kind,
+        category: String(body.category || 'general').trim() || 'general',
+        title,
+        message,
+        default_type: defaultType,
+        active: body.active !== false,
+        updated_at: new Date().toISOString(),
+      };
+      const client = getSupabaseAdmin()!;
+      const { data, error } = await client
+        .from('ui_feedback_messages')
+        .upsert(row, { onConflict: 'key' })
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        return res.status(500).json({
+          success: false,
+          error: safeError(error.message, 'Failed to save feedback message'),
+        });
+      }
+      return res.json({ success: true, data: mapFeedbackRow(data) });
+    } catch (err: any) {
+      console.error('PUT /api/admin/cms/feedback error:', err);
+      return res.status(500).json({
+        success: false,
+        error: safeError(err, 'Failed to save feedback message'),
+      });
+    }
+  });
+
+  router.post('/cms/feedback/seed', requireAdmin, async (_req, res) => {
+    try {
+      if (!requireConfigured(res)) return;
+      const client = getSupabaseAdmin()!;
+      const { data: existing, error: exErr } = await client
+        .from('ui_feedback_messages')
+        .select('key');
+      if (exErr) {
+        return res.status(500).json({
+          success: false,
+          error: safeError(exErr.message, 'Failed to read existing feedback keys'),
+        });
+      }
+      const have = new Set((existing || []).map((r: any) => String(r.key)));
+      const missing = DEFAULT_FEEDBACK_CATALOG.filter((e) => !have.has(e.key)).map((e) => ({
+        key: e.key,
+        kind: e.kind,
+        category: e.category,
+        title: e.title,
+        message: e.message,
+        default_type: e.defaultType,
+        active: true,
+        updated_at: new Date().toISOString(),
+      }));
+      if (!missing.length) {
+        return res.json({
+          success: true,
+          data: { inserted: 0, total: have.size, message: 'All catalog keys already present' },
+        });
+      }
+      const { error } = await client.from('ui_feedback_messages').insert(missing);
+      if (error) {
+        return res.status(500).json({
+          success: false,
+          error: safeError(error.message, 'Failed to seed feedback messages'),
+        });
+      }
+      return res.json({
+        success: true,
+        data: { inserted: missing.length, total: have.size + missing.length },
+      });
+    } catch (err: any) {
+      console.error('POST /api/admin/cms/feedback/seed error:', err);
+      return res.status(500).json({
+        success: false,
+        error: safeError(err, 'Failed to seed feedback messages'),
+      });
     }
   });
 

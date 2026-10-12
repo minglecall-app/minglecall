@@ -1,0 +1,877 @@
+[
+  {
+    "title": "🔴 YOU ARE NOW LIVE!",
+    "message": "Live in Quick Match pool! Callers will discover your stream and can like/match with you.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "4K not recommended",
+    "message": "4K / high FPS increases freeze risk on mobile. Client caps phones to 720p30. Prefer 720p30 for smooth 1-on-1 calls.",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Accept failed",
+    "message": "Could not register this call on the server. Please try accepting again.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Account Deleted",
+    "message": "Your account has been permanently removed.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Action Locked",
+    "message": "Admin permission required to use mock locations.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Action Restricted",
+    "message": "Only female hosts can initiate Friend Requests to callers.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Agency Role Restriction",
+    "message": "Agencies cannot initiate calls. Your account is dedicated to managing female host teams and earning agency commission.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Algorithm Weights Updated ⚡",
+    "message": "Rotational priority scoring parameters saved to Supabase system configs.",
+    "file": "src/components/admin/AdminRotationalPriorityMatrix.tsx"
+  },
+  {
+    "title": "Already Claimed",
+    "message": "You have already claimed today’s streak reward!",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Already Claimed",
+    "message": "This mission reward was already claimed.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Already Claimed",
+    "message": "Master chest already claimed today.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Already reported",
+    "message": "You already have a pending report for this user with the same reason.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Already requested",
+    "message": "An open rating request is already waiting for this caller.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Auth Required 🔴",
+    "message": "Sign in as admin to test LiveKit tokens.",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Avatar Uploaded 📸",
+    "message": "Profile photo uploaded to Cloudflare R2 storage!",
+    "file": "src/components/onboarding/OnboardingWizard.tsx"
+  },
+  {
+    "title": "Banner Deleted",
+    "message": "Promo banner removed from Home page",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Banner Save Failed",
+    "message": "Could not reach the server.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Batch marked paid",
+    "message": "Settlement event recorded via Finance API.",
+    "file": "src/components/admin/finance/AdminFinancialModule.tsx"
+  },
+  {
+    "title": "Blocked",
+    "message": "You cannot message this user.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Bonus Claim Failed",
+    "message": "Network error claiming bonus.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Call Connected! 📹",
+    "message": "1-on-1 WebRTC Video Call connected live.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Call Ended",
+    "message": "Call ended due to insufficient coin balance. Please recharge.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Call Error",
+    "message": "User not found",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Call Failed",
+    "message": "Could not reach the signaling server. Please refresh the page and try again.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Call Missed",
+    "message": "No answer — ring timed out.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Camera Flip",
+    "message": "Could not switch camera on this device.",
+    "file": "src/components/videocall/VideoCallStudio.tsx"
+  },
+  {
+    "title": "Cannot save",
+    "message": "Fix overcrowded top corners on Mobile and Desktop (max 2 chip widgets per corner).",
+    "file": "src/components/admin/AdminDiscoveryCardDesigner.tsx"
+  },
+  {
+    "title": "Chat Cleared",
+    "message": "Conversation history has been cleared for you.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Chats Marked as Read",
+    "message": "All new message indicators have been cleared.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Checkout started",
+    "message": "Complete payment to credit coins. Balance updates only after server confirmation.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Claim Failed",
+    "message": "Network error claiming streak reward.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Claim Failed",
+    "message": "Network error claiming mission reward.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Claim Failed",
+    "message": "Network error claiming master chest.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Client grant blocked",
+    "message": "Coin credits must post via Financial Module API (wallet_ledger PURCHASE). Use Admin → Manual Coin Credit.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Confirmation Required",
+    "message": "Type DELETE to confirm destructive user / admin / R2 purge options.",
+    "file": "src/components/admin/ResetMockDataModal.tsx"
+  },
+  {
+    "title": "Confirmation Required",
+    "message": "Type DELETE in the confirmation box before factory wipe.",
+    "file": "src/components/admin/ResetMockDataModal.tsx"
+  },
+  {
+    "title": "Confirmation Required",
+    "message": "Type DELETE or your account email to continue.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Connecting...",
+    "message": "Securing the call channel. Your call will start automatically in a moment.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Connection Error",
+    "message": "Could not reach server for LiveKit status.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Currencies Reset",
+    "message": "Restored default placeholder FX rates.",
+    "file": "src/components/admin/AdminTaxonomyManager.tsx"
+  },
+  {
+    "title": "Database Synchronized",
+    "message": "Female creator performance metrics refreshed from Supabase.",
+    "file": "src/components/admin/AdminCreatorPerformanceAnalytics.tsx"
+  },
+  {
+    "title": "Default Restored ⚡",
+    "message": "System reset to 720p HD @ 2,200 kbps (30 FPS) — recommended for smooth calls",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Defaults Restored",
+    "message": "Algorithm weights reset to production optimal defaults.",
+    "file": "src/components/admin/AdminRotationalPriorityMatrix.tsx"
+  },
+  {
+    "title": "Delete Failed",
+    "message": "Could not reach the server.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Direct Upload Verified 🚀",
+    "message": "File uploaded directly to Cloudflare R2 bucket with zero DB overhead.",
+    "file": "src/components/admin/AdminDatabaseStorageConfig.tsx"
+  },
+  {
+    "title": "Directory unchanged",
+    "message": "No remote profiles returned; keeping your current session directory.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Economy Settings Saved",
+    "message": "Burn rates, shares, peg, and legacy engagement knobs updated.",
+    "file": "src/components/admin/AdminEconomyConfigHub.tsx"
+  },
+  {
+    "title": "Email Verified Successfully! 🟢",
+    "message": "Proceeding to Profile Setup...",
+    "file": "src/components/auth/AuthModal.tsx"
+  },
+  {
+    "title": "Empty message",
+    "message": "Add text or wait for the image upload to finish.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Error",
+    "message": "Failed to test LiveKit token.",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "File Too Large",
+    "message": "Avatar image must be under 15MB",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Finance config saved",
+    "message": "Cycle, UTC close time, and settlement switch updated.",
+    "file": "src/components/admin/finance/AdminFinancialModule.tsx"
+  },
+  {
+    "title": "Flag Sizes Reset 🚩",
+    "message": "Restored recommended default SVG flag dimensions.",
+    "file": "src/components/admin/AdminTaxonomyManager.tsx"
+  },
+  {
+    "title": "Friend Request Info 🌸",
+    "message": "In this platform, Female Creators send Friend Requests to loyal callers. Start a chat or video call to connect with the creator!",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Gallery Save Failed",
+    "message": "Photos uploaded to storage but were not saved to your profile. Please try again.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Gender Lock Active",
+    "message": "Gender cannot be modified after registration.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Gift Removed",
+    "message": "Virtual gift removed from store",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Gifts Reset 🎁",
+    "message": "Virtual gifts restored to default catalog.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Go Live Restricted",
+    "message": "Only female creators and female members can broadcast live in Quick Match. Male users can discover & match with live female hosts!",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Grid Refreshed",
+    "message": "Synced real-time surveillance matrix with signaling server.",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Input Required",
+    "message": "Please enter a valid image URL",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Insufficient Coins 🪙",
+    "message": "You need at least 20 coins to tip a moment.",
+    "file": "src/components/social/MomentsFeed.tsx"
+  },
+  {
+    "title": "Insufficient Coins 🪙",
+    "message": "Please top up your wallet to contribute to this goal.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Invalid Discount",
+    "message": "Discount Price must be a valid number.",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Invalid Discount",
+    "message": "Discount Price must be ≤ Price.",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Invalid Email",
+    "message": "Please provide a valid email address to test dispatch.",
+    "file": "src/components/admin/AdminDatabaseStorageConfig.tsx"
+  },
+  {
+    "title": "Invalid File",
+    "message": "Please select an image file (PNG, JPG, WEBP, GIF).",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Invalid File",
+    "message": "Please select a valid image file (PNG, JPG, WEBP, GIF).",
+    "file": "src/components/teamleader/TeamLeaderDashboard.tsx"
+  },
+  {
+    "title": "Invalid File Type",
+    "message": "Please select an image file (PNG, JPG, WEBP, GIF)",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Invalid Target",
+    "message": "Earning override is only available for female creators.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "It's a Match! 🎉",
+    "message": "You both liked each other.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Legacy Queue Read-Only",
+    "message": "Approving manual payout_requests is disabled to prevent double-pay. Use Financial Module → settlement batches.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Legacy Queue Read-Only",
+    "message": "Manual payout status changes are disabled. Historical payout_requests are view-only; cash-out is via settlements.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Logged Out 👋",
+    "message": "You have been safely logged out of your session.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Missing fields",
+    "message": "Name, email, and office role are required.",
+    "file": "src/components/admin/AdminOfficeRbacPage.tsx"
+  },
+  {
+    "title": "Moment published",
+    "message": "Your post is live in the Moments feed.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Moment removed",
+    "message": "Your moment was deleted.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Navigation Save Failed",
+    "message": "Could not reach the server.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Navigation Saved",
+    "message": "Navigation bar updated.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Package Deleted",
+    "message": "Coin bundle removed from store",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Password Mismatch",
+    "message": "New password and confirmation password do not match.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Password Required",
+    "message": "Enter your password to permanently delete this account.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Password Reset",
+    "message": "Your password was updated. Please sign in.",
+    "file": "src/components/auth/AuthModal.tsx"
+  },
+  {
+    "title": "Password Updated! 🔒",
+    "message": "Your account password has been updated successfully.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Payment acknowledged",
+    "message": "Your Agency commission receipt was recorded. Hosts acknowledge separately.",
+    "file": "src/components/teamleader/TeamLeaderSettlementsPanel.tsx"
+  },
+  {
+    "title": "Payout",
+    "message": "Select a country first.",
+    "file": "src/components/payout/PayoutCardsPanel.tsx"
+  },
+  {
+    "title": "Payout",
+    "message": "This method is already saved and locked. Remove it first or contact admin to change.",
+    "file": "src/components/payout/PayoutCardsPanel.tsx"
+  },
+  {
+    "title": "Payout",
+    "message": "This card is locked and cannot be edited.",
+    "file": "src/components/payout/PayoutCardsPanel.tsx"
+  },
+  {
+    "title": "Payout",
+    "message": "Payout card saved and locked.",
+    "file": "src/components/payout/PayoutCardsPanel.tsx"
+  },
+  {
+    "title": "Payout",
+    "message": "Payout card removed.",
+    "file": "src/components/payout/PayoutCardsPanel.tsx"
+  },
+  {
+    "title": "Period-End Settlements Only",
+    "message": "Manual withdrawals are disabled. Host salaries and Agency commissions pay out through settlement batches at period close.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Permission Denied",
+    "message": "Platform Admin has not granted mock location permissions to your account.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Permission Denied",
+    "message": "Only administrators can override female creator earning rates.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Photo Required",
+    "message": "Please upload a photo and add a caption for your moment.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Photo Required",
+    "message": "Please upload or select a photo for your moment post.",
+    "file": "src/components/social/MomentsFeed.tsx"
+  },
+  {
+    "title": "Picture Selected ✨",
+    "message": "Avatar applied to Agency profile!",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Picture Selected ✨",
+    "message": "Avatar applied to Female Host profile!",
+    "file": "src/components/teamleader/TeamLeaderDashboard.tsx"
+  },
+  {
+    "title": "Policy Deleted",
+    "message": "Policy document removed",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Policy Save Failed",
+    "message": "Could not reach the server.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Profile Picture Applied ✨",
+    "message": "Image applied to form preview.",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Profile Picture Applied ✨",
+    "message": "Image applied to host profile preview.",
+    "file": "src/components/teamleader/TeamLeaderDashboard.tsx"
+  },
+  {
+    "title": "Profile Picture Updated",
+    "message": "Your new profile picture was uploaded to Cloudflare R2.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Profile Picture Updated",
+    "message": "New photo uploaded to Cloudflare R2 and saved to your profile.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Profile Picture Updated ✨",
+    "message": "Avatar preset applied successfully!",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Profile Picture Updated ✨",
+    "message": "Custom avatar URL applied and saved!",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Profile Picture Uploaded ☁️",
+    "message": "Agency picture stored on Cloudflare R2.",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Profile Picture Uploaded ☁️",
+    "message": "Female Host picture stored on Cloudflare R2.",
+    "file": "src/components/teamleader/TeamLeaderDashboard.tsx"
+  },
+  {
+    "title": "Profile Updated",
+    "message": "Changes saved successfully",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Publish failed",
+    "message": "Server did not return the new post.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Purchase failed",
+    "message": "Could not reach the funding API.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Rating failed",
+    "message": "Only the caller can submit this rating.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Ready Now Failed",
+    "message": "Network error updating Ready Now.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Recipient Not Found",
+    "message": "Could not locate recipient user.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Registration Complete! 🎉",
+    "message": "Your profile has been saved.",
+    "file": "src/components/onboarding/OnboardingWizard.tsx"
+  },
+  {
+    "title": "Remove Failed",
+    "message": "Could not save gallery changes. Please try again.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Remove Failed",
+    "message": "Could not save gallery video changes. Please try again.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Report failed",
+    "message": "You cannot report yourself.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Report submitted",
+    "message": "Report submitted — our safety team will review.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Request failed",
+    "message": "Only the host can ask for a rating.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Reset",
+    "message": "Default layout restored in the editor (not saved yet).",
+    "file": "src/components/admin/AdminDiscoveryCardDesigner.tsx"
+  },
+  {
+    "title": "Role assigned",
+    "message": "Updated",
+    "file": "src/components/admin/AdminOfficeRbacPage.tsx"
+  },
+  {
+    "title": "Schema API Unavailable ⚠️",
+    "message": "Could not load /supabase_schema.sql via /api/admin/schema. Open the root schema file directly.",
+    "file": "src/components/admin/AdminDatabaseStorageConfig.tsx"
+  },
+  {
+    "title": "Schema Update Required",
+    "message": "Your existing Supabase table expects UUID keys. Go to Tab 5 (SQL Schema), copy the schema (which drops the old UUID table), and run it in your Supabase SQL Editor.",
+    "file": "src/components/admin/AdminDatabaseStorageConfig.tsx"
+  },
+  {
+    "title": "Seed Failed",
+    "message": "Could not reach the server.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Select Category",
+    "message": "Please check at least one data category to reset.",
+    "file": "src/components/admin/ResetMockDataModal.tsx"
+  },
+  {
+    "title": "Settings Saved 🎯",
+    "message": "Creator targets saved. Period cycle & UTC close time synced to Financial Module.",
+    "file": "src/components/admin/AdminCreatorTargetConfig.tsx"
+  },
+  {
+    "title": "Shortcut Removed",
+    "message": "Quick shortcut removed from Home page",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Shortcut Save Failed",
+    "message": "Could not reach the server.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in failed",
+    "message": "Missing authenticated profile.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Account switching without a password is disabled. Use email and password.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Persona switching is disabled. Sign in with the correct account.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Use email and password to log in.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to submit a rating.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to ask for a rating.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to like moments.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to tip.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to post a moment.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to delete a moment.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to manage favorites.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to like profiles.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to pass profiles.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to send friend requests.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to accept friend requests.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to decline friend requests.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to manage friends.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to block users.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to unblock users.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Sign in required",
+    "message": "Please sign in to report users.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Signal weak",
+    "message": "Call accepted — waiting for caller via call log sync. Stay on this screen.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Signed out",
+    "message": "Your account was signed in on another device. Only one login is allowed at a time.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "SMTP Saved & Persisted! 💾✉️",
+    "message": "Live Email & OTP settings saved to disk and database. Settings will persist across restarts.",
+    "file": "src/components/admin/AdminDatabaseStorageConfig.tsx"
+  },
+  {
+    "title": "Starter CMS Loaded",
+    "message": "Honest default banners, policies, and shortcuts saved to the database.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Synced with Supabase",
+    "message": "Refreshed active creators and live metrics.",
+    "file": "src/components/admin/AdminRotationalPriorityMatrix.tsx"
+  },
+  {
+    "title": "System Settings Saved ⚙️",
+    "message": "Economy parameters, taxonomies, and platform settings saved live.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Template Copied! 📋",
+    "message": "Paste into your Supabase Dashboard Email Templates.",
+    "file": "src/components/admin/AdminDatabaseStorageConfig.tsx"
+  },
+  {
+    "title": "Tip failed",
+    "message": "Missing moment post id.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Tip failed",
+    "message": "You cannot tip your own moment.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Token Verified 🟢",
+    "message": "LiveKit WebRTC token signed successfully!",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Unavailable for Calls",
+    "message": "Agencies cannot receive live calls. Agencies only manage agency hosts.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Update Failed",
+    "message": "Could not reach the server.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Upload Failed",
+    "message": "Photo preview was shown locally, but the file was not saved to Cloudflare R2.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Upload Incomplete",
+    "message": "No durable photo URL was returned. Please try again.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "User not found",
+    "message": "Could not find that user.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "User Unblocked 🔓",
+    "message": "User has been unblocked successfully.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Validation Error",
+    "message": "Name is required",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Validation Error",
+    "message": "Login email is required so the agency can sign in.",
+    "file": "src/components/admin/AdminDashboard.tsx"
+  },
+  {
+    "title": "Validation Error",
+    "message": "Please enter creator name",
+    "file": "src/components/teamleader/TeamLeaderDashboard.tsx"
+  },
+  {
+    "title": "Validation Error",
+    "message": "A valid email address is required",
+    "file": "src/components/teamleader/TeamLeaderDashboard.tsx"
+  },
+  {
+    "title": "Validation Error",
+    "message": "Agency name is required.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Validation Error",
+    "message": "A valid login email is required so the agency can sign in.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Validation Error",
+    "message": "Creator name is required.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Validation Error",
+    "message": "A valid email address is required.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Validation Error",
+    "message": "Placeholder emails are not allowed. Use a real email.",
+    "file": "src/context/AppContext.tsx"
+  },
+  {
+    "title": "Video Save Failed",
+    "message": "Videos may be in storage but were not saved to your profile. Please try again.",
+    "file": "src/components/profile/UserProfilePage.tsx"
+  },
+  {
+    "title": "Video Uploaded 🎥",
+    "message": "Introduction video uploaded successfully to R2!",
+    "file": "src/components/onboarding/OnboardingWizard.tsx"
+  }
+]

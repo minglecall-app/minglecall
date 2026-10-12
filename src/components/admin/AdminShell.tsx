@@ -29,6 +29,7 @@ import {
   LayoutTemplate,
   Mail,
   Menu,
+  MessageSquare,
   Package,
   Percent,
   Radio,
@@ -99,6 +100,7 @@ const ICON_MAP: Record<AdminNavIconName, LucideIcon> = {
   Languages,
   Sparkles,
   Heart,
+  MessageSquare,
 };
 
 const COLLAPSE_STORAGE_KEY = 'minglecall:admin-sidebar-collapsed';

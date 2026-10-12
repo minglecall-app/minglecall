@@ -746,6 +746,50 @@ CREATE TABLE IF NOT EXISTS public.home_quick_links (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Editable app toasts / alerts / modal / inline copy (Admin → CMS → Toasts & messages).
+-- Seed missing keys via POST /api/admin/cms/feedback/seed from shared/cms/feedbackCatalog.ts.
+CREATE TABLE IF NOT EXISTS public.ui_feedback_messages (
+    key TEXT PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'toast'
+      CHECK (kind IN ('toast', 'alert', 'modal', 'inline')),
+    category TEXT NOT NULL DEFAULT 'general',
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    default_type TEXT NOT NULL DEFAULT 'info'
+      CHECK (default_type IN ('success', 'error', 'info', 'warning')),
+    active BOOLEAN NOT NULL DEFAULT true,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ui_feedback_messages_category
+  ON public.ui_feedback_messages (category);
+
+CREATE INDEX IF NOT EXISTS idx_ui_feedback_messages_kind_active
+  ON public.ui_feedback_messages (kind, active);
+
+ALTER TABLE public.ui_feedback_messages ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "public select ui_feedback_messages" ON public.ui_feedback_messages;
+DROP POLICY IF EXISTS "admin write ui_feedback_messages" ON public.ui_feedback_messages;
+CREATE POLICY "public select ui_feedback_messages" ON public.ui_feedback_messages
+  FOR SELECT USING (active = true);
+CREATE POLICY "admin write ui_feedback_messages" ON public.ui_feedback_messages
+  FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.role = 'admin'
+        AND (p.auth_id = auth.uid() OR p.id = auth.uid()::text)
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.role = 'admin'
+        AND (p.auth_id = auth.uid() OR p.id = auth.uid()::text)
+    )
+  );
+
 -- Default homepage CMS content for fresh databases (safe to re-run).
 INSERT INTO public.home_banners (
   id, title, subtitle, badge, cta_text, tag_color, image_url,

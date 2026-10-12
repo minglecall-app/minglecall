@@ -2311,6 +2311,45 @@ export async function deleteCmsPolicyFromSupabase(policyIdOrSlug: string): Promi
 // HOME BANNERS & QUICK LINKS API
 // ============================================================================
 
+/** Active UI feedback rows (toasts/alerts) — public SELECT of active only. */
+export async function fetchUiFeedbackMessagesFromSupabase(): Promise<
+  | Array<{
+      key: string;
+      kind: string;
+      category: string;
+      title: string;
+      message: string;
+      defaultType: string;
+      active: boolean;
+    }>
+  | null
+> {
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const { data, error } = await supabase
+      .from('ui_feedback_messages')
+      .select('key, kind, category, title, message, default_type, active')
+      .eq('active', true)
+      .order('key', { ascending: true });
+    if (error) {
+      console.warn('Supabase fetchUiFeedbackMessages error:', error.message);
+      return null;
+    }
+    return (data || []).map((row: any) => ({
+      key: String(row.key),
+      kind: String(row.kind || 'toast'),
+      category: String(row.category || 'general'),
+      title: String(row.title || ''),
+      message: String(row.message || ''),
+      defaultType: String(row.default_type || 'info'),
+      active: row.active !== false,
+    }));
+  } catch (err) {
+    console.warn('Supabase fetchUiFeedbackMessages exception:', err);
+    return null;
+  }
+}
+
 export async function fetchHomeBannersFromSupabase(): Promise<any[] | null> {
   if (!isSupabaseConfigured()) return null;
   try {

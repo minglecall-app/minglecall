@@ -24,6 +24,7 @@ export type AdminSubTabKey =
   | 'cms'
   | 'cms-navigation'
   | 'cms-payout-cards'
+  | 'cms-toasts'
   | 'office-rbac';
 
 /** Non-tab sidebar actions (Setup Wizard / Reset Data). */
@@ -70,7 +71,8 @@ export type AdminNavIconName =
   | 'Sparkles'
   | 'Heart'
   | 'FlaskConical'
-  | 'Shield';
+  | 'Shield'
+  | 'MessageSquare';
 
 export interface AdminNavL2Item {
   id: string;
@@ -292,6 +294,13 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         icon: 'Landmark',
         kind: 'tab',
         title: 'Configure PayPal, Bank, and Wallet payout field templates',
+      },
+      {
+        id: 'cms-toasts',
+        label: 'Toasts & messages',
+        icon: 'MessageSquare',
+        kind: 'tab',
+        title: 'Edit app toast, alert, and feedback copy',
       },
     ],
   },

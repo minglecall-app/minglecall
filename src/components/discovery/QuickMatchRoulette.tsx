@@ -103,6 +103,7 @@ export const QuickMatchRoulette: React.FC<QuickMatchRouletteProps> = ({
     recordQuickMatch,
     sendQuickMatchGift,
     showToast,
+    showToastKey,
     activeQuickMatchCallerIds,
     connectedCallersByHost,
     connectCallerToHost,
@@ -555,7 +556,7 @@ export const QuickMatchRoulette: React.FC<QuickMatchRouletteProps> = ({
 
     const ok = await recordQuickMatch(currentHost);
     if (ok) {
-      showToast('🎉 Mutual Match!', `You and ${currentHost.name} matched!`, 'success');
+      showToastKey('match.mutual_discovery', { vars: { name: currentHost.name } });
     } else {
       setIsLiked(false);
     }
@@ -566,7 +567,7 @@ export const QuickMatchRoulette: React.FC<QuickMatchRouletteProps> = ({
     const ok = await recordQuickMatch(caller);
     if (ok) {
       spawnParticles('💖');
-      showToast('🎉 Match Saved!', `Matched with ${caller.name}! Added to your Matches tab.`, 'success');
+      showToastKey('match.host_saved', { vars: { name: caller.name } });
     }
   };
 

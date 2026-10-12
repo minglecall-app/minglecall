@@ -47,7 +47,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   defaultRole = 'male_user',
   onNavigateToTab,
 }) => {
-  const { completeAuthenticatedLogin, showToast, updateUserProfile } = useApp();
+  const { completeAuthenticatedLogin, showToast, showToastKey, updateUserProfile } = useApp();
 
   const [mode, setMode] = useState<'login' | 'register' | 'reset'>(initialMode);
 
@@ -385,7 +385,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setShowOnboarding(true);
       } else {
         completeAuthenticatedLogin(res.user);
-        showToast('Welcome Back! 👋', `Logged in as ${res.user.name}`, 'success');
+        showToastKey('auth.welcome_back', { vars: { name: res.user.name } });
         if (onNavigateToTab) {
           if (res.user.role === 'admin') {
             onNavigateToTab('admin');

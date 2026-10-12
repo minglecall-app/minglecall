@@ -946,6 +946,127 @@ async function handleAdmin(path, req, res) {
     return send(res, 200, { success: true, data: saved.data || [] });
   }
 
+  if (path === 'admin/cms/feedback' && req.method === 'GET') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const { data, error } = await auth.client
+      .from('ui_feedback_messages')
+      .select('*')
+      .order('key', { ascending: true });
+    if (error) return send(res, 500, { success: false, error: error.message });
+    let defaultsCount = 0;
+    try {
+      const pathMod = require('path');
+      const fs = require('fs');
+      const jsonPath = pathMod.join(__dirname, '..', '..', '..', 'shared', 'cms', 'feedbackCatalog.defaults.json');
+      if (fs.existsSync(jsonPath)) {
+        defaultsCount = JSON.parse(fs.readFileSync(jsonPath, 'utf8')).length;
+      }
+    } catch (_) {}
+    return send(res, 200, {
+      success: true,
+      data: {
+        rows: (data || []).map((row) => ({
+          key: row.key,
+          kind: row.kind || 'toast',
+          category: row.category || 'general',
+          title: row.title || '',
+          message: row.message || '',
+          defaultType: row.default_type || 'info',
+          active: row.active !== false,
+          updatedAt: row.updated_at ?? null,
+        })),
+        defaultsCount,
+      },
+    });
+  }
+
+  if (path === 'admin/cms/feedback' && req.method === 'PUT') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    const body = (await readJsonBody(req)) || {};
+    const key = String(body.key || '').trim();
+    if (!key || key.length > 120) {
+      return send(res, 400, { success: false, error: 'Valid key is required' });
+    }
+    const kind = String(body.kind || 'toast');
+    const defaultType = String(body.defaultType || body.default_type || 'info');
+    const title = String(body.title || '').trim();
+    if (!title) return send(res, 400, { success: false, error: 'Title is required' });
+    const row = {
+      key,
+      kind,
+      category: String(body.category || 'general').trim() || 'general',
+      title,
+      message: String(body.message ?? ''),
+      default_type: defaultType,
+      active: body.active !== false,
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await auth.client
+      .from('ui_feedback_messages')
+      .upsert(row, { onConflict: 'key' })
+      .select('*')
+      .maybeSingle();
+    if (error) return send(res, 500, { success: false, error: error.message });
+    return send(res, 200, {
+      success: true,
+      data: {
+        key: data.key,
+        kind: data.kind || 'toast',
+        category: data.category || 'general',
+        title: data.title || '',
+        message: data.message || '',
+        defaultType: data.default_type || 'info',
+        active: data.active !== false,
+        updatedAt: data.updated_at ?? null,
+      },
+    });
+  }
+
+  if (path === 'admin/cms/feedback/seed' && req.method === 'POST') {
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    let catalog = [];
+    try {
+      const pathMod = require('path');
+      const fs = require('fs');
+      const jsonPath = pathMod.join(__dirname, '..', '..', '..', 'shared', 'cms', 'feedbackCatalog.defaults.json');
+      if (fs.existsSync(jsonPath)) catalog = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    } catch (e) {
+      return send(res, 500, { success: false, error: 'Default feedback catalog missing' });
+    }
+    const { data: existing, error: exErr } = await auth.client
+      .from('ui_feedback_messages')
+      .select('key');
+    if (exErr) return send(res, 500, { success: false, error: exErr.message });
+    const have = new Set((existing || []).map((r) => String(r.key)));
+    const missing = (catalog || [])
+      .filter((e) => e && e.key && !have.has(e.key))
+      .map((e) => ({
+        key: e.key,
+        kind: e.kind || 'toast',
+        category: e.category || 'general',
+        title: e.title || e.key,
+        message: e.message || '',
+        default_type: e.defaultType || 'info',
+        active: true,
+        updated_at: new Date().toISOString(),
+      }));
+    if (!missing.length) {
+      return send(res, 200, {
+        success: true,
+        data: { inserted: 0, total: have.size, message: 'All catalog keys already present' },
+      });
+    }
+    const { error } = await auth.client.from('ui_feedback_messages').insert(missing);
+    if (error) return send(res, 500, { success: false, error: error.message });
+    return send(res, 200, {
+      success: true,
+      data: { inserted: missing.length, total: have.size + missing.length },
+    });
+  }
+
   if (
     (path === 'admin/cms/banners' ||
       path === 'admin/cms/policies' ||
