@@ -22,7 +22,11 @@ const {
   getPasswordPolicyError,
 } = require('./helpers');
 const { granularResetDb, isFactoryResetAllowed } = require('./granularResetDb');
-const { listServerDiagnosticModules, runServerDiagnostic } = require('./systemDiagnostics');
+const {
+  listServerDiagnosticModules,
+  runServerDiagnostic,
+  collectInfraStatus,
+} = require('./systemDiagnostics');
 const { listK6SmokeScenarios, runK6Smoke } = require('./k6Smoke');
 const {
   OFFICE_FEATURES,
@@ -198,6 +202,26 @@ async function handleAdmin(path, req, res) {
   if (path === 'admin/api-health') {
     // handled in router.js — leave null so router inline can catch, or handle here
     return null;
+  }
+
+  if (path === 'admin/infra-status' && (req.method === 'GET' || req.method === 'OPTIONS')) {
+    if (req.method === 'OPTIONS') {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+    const auth = await requireAdminFeature(req, permissionForAdminPath(path));
+    if (auth.ok === false) return send(res, auth.status, { success: false, error: auth.error });
+    try {
+      const data = await collectInfraStatus({ profileId: auth.profileId });
+      return send(res, 200, { success: true, data });
+    } catch (err) {
+      console.error('[infra-status]', (err && err.message) || err);
+      return send(res, 500, {
+        success: false,
+        error: { message: 'Infra status probe failed', code: 'INFRA_STATUS_FAILED' },
+      });
+    }
   }
 
   if (path === 'admin/system-diagnostics') {

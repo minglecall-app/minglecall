@@ -23,7 +23,11 @@ import {
 import { hardDeleteUserCompletely, cleanupOrphanAuthUsersAdmin } from '../userHardDelete';
 import { isR2Configured, updateR2RuntimeConfig } from '../r2Storage';
 import { requireAdmin, requireAuth } from '../middleware/auth';
-import { listServerDiagnosticModules, runServerDiagnostic } from '../../lib/systemDiagnostics';
+import {
+  collectInfraStatus,
+  listServerDiagnosticModules,
+  runServerDiagnostic,
+} from '../../lib/systemDiagnostics';
 import { listK6SmokeScenarios, runK6Smoke } from '../../lib/k6Smoke';
 import { getPasswordPolicyError } from '../../shared/passwordPolicy';
 import {
@@ -1029,6 +1033,20 @@ export function createAdminRouter(ctx: ServerRuntime): Router {
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message || 'Failed to update infrastructure parameters' });
+    }
+  });
+
+  router.get('/infra-status', requireAdmin, async (req, res) => {
+    const profileId = String((req as any).profileId || (req as any).user?.id || '').trim();
+    try {
+      const data = await collectInfraStatus({ profileId });
+      return res.json({ success: true, data });
+    } catch (err: any) {
+      console.error('[infra-status]', err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: { message: 'Infra status probe failed', code: 'INFRA_STATUS_FAILED' },
+      });
     }
   });
 

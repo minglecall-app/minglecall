@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 const diagnostics = require('../api/_lib/cjs/systemDiagnostics.js') as {
   listServerDiagnosticModules: () => string[];
   runServerDiagnostic: (moduleId: string, input: DiagnosticInput) => Promise<DiagnosticResult | null>;
+  collectInfraStatus: (input: { profileId?: string }) => Promise<InfraStatusSnapshot>;
 };
 
 export type DiagnosticStep = {
@@ -35,6 +36,24 @@ export type DiagnosticInput = {
   token?: string;
 };
 
+export type InfraSystemMode = 'live' | 'degraded' | 'unavailable';
+
+export type InfraSystemStatus = {
+  id: string;
+  label: string;
+  mode: InfraSystemMode;
+  detail: string;
+  latencyMs: number;
+  checkedAt: string;
+};
+
+export type InfraStatusSnapshot = {
+  checkedAt: string;
+  latencyMs: number;
+  overall: 'healthy' | 'degraded' | 'critical';
+  systems: InfraSystemStatus[];
+};
+
 export function listServerDiagnosticModules(): string[] {
   return diagnostics.listServerDiagnosticModules();
 }
@@ -44,4 +63,8 @@ export function runServerDiagnostic(
   input: DiagnosticInput
 ): Promise<DiagnosticResult | null> {
   return diagnostics.runServerDiagnostic(moduleId, input);
+}
+
+export function collectInfraStatus(input: { profileId?: string }): Promise<InfraStatusSnapshot> {
+  return diagnostics.collectInfraStatus(input || {});
 }

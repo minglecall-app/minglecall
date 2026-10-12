@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   PhoneOff,
-  PhoneCall,
   Phone,
   Mic,
   MicOff,
@@ -65,7 +64,6 @@ export const VideoCallStudio: React.FC<VideoCallStudioProps> = ({ onOpenStore: _
     notifyInCallChatPreview,
     chatMessages,
     friends,
-    isFriend,
     getEffectiveCallRate,
     showToast,
   } = useApp();
@@ -1610,7 +1608,6 @@ export const VideoCallStudio: React.FC<VideoCallStudioProps> = ({ onOpenStore: _
     isFemaleCreatorRole(otherUser.role) || Boolean(otherUser.teamLeaderId);
   const showInCallGiftButton = !iAmInCallGiftReceiver && peerIsInCallGiftReceiver;
   const currentRatePerMin = getEffectiveCallRate(otherUserId, currentUser.id);
-  const isFriendCall = isFriend(otherUserId);
 
   // Exact 1-Minute Warning & Low Balance Calculations (initiator only, after billing started)
   const tickDuration = 60;
@@ -1761,98 +1758,81 @@ export const VideoCallStudio: React.FC<VideoCallStudioProps> = ({ onOpenStore: _
     // Incoming Accept UI whenever we did not place the call (covers profile↔auth id aliases)
     const isReceiver = !selfIds.has(callerId);
 
+    const displayName = String(otherUser.name || 'User').trim() || 'User';
+    const callPicture = otherUser.avatarUrl || otherUser.gallery?.[0] || '';
+    const age = Number(otherUser.age);
+    const showAge = Number.isFinite(age) && age > 0;
+    const showFlag = Boolean(otherUser.countryCode || otherUser.nationality);
+
     return (
       <div
         id="video-call-ringing-overlay"
-        className="fixed inset-0 z-[10050] bg-[#0A0C10]/95 backdrop-blur-2xl flex items-center justify-center overflow-y-auto
-          pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]
+        className="fixed inset-0 z-[10050] bg-app flex flex-col items-center justify-center text-center
+          pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]
           pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]"
       >
-        <div className="relative w-full max-w-md max-h-[min(100dvh-2rem,100%)] overflow-y-auto bg-[#12151C] border border-slate-800 rounded-3xl p-6 sm:p-8 text-center space-y-6 shadow-2xl animate-in zoom-in-95 duration-200 my-auto">
+        <p className="text-brand text-sm font-medium">
+          {isReceiver ? 'Incoming call' : 'Calling'}
+        </p>
 
-          {/* Top Status Title */}
-          <div className="space-y-1">
-            <span className="px-3 py-1 rounded-full bg-pink-500/20 border border-pink-500/40 text-pink-300 font-mono text-xs font-bold uppercase tracking-wider inline-flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-pink-500 animate-ping" />
-              {isReceiver ? 'Incoming Video Call 📹' : 'Ringing... 📞'}
-            </span>
-            <h2 className="text-2xl font-black text-white mt-2">
-              {isReceiver ? `Call from ${otherUser.name}` : `Calling ${otherUser.name}...`}
-            </h2>
-          </div>
-
-          {/* Avatar Ringing Animation */}
-          <div className="relative w-32 h-32 mx-auto flex items-center justify-center">
-            {/* Animated Pulses */}
-            <div className="absolute inset-0 rounded-full bg-pink-500/20 animate-ping duration-1000" />
-            <div className="absolute -inset-4 rounded-full bg-indigo-500/20 animate-pulse duration-700" />
-
+        <div className="mt-6 w-36 h-36 rounded-full overflow-hidden border border-app bg-app-card shrink-0">
+          {callPicture ? (
             <img
-              src={otherUser.avatarUrl}
-              alt={otherUser.name}
-              className="relative w-28 h-28 rounded-full object-cover ring-4 ring-pink-500 shadow-2xl z-10"
+              src={callPicture}
+              alt={displayName}
+              className="w-full h-full object-cover"
             />
-          </div>
-
-          {/* Details & Economy Rate Banner */}
-          <div className="bg-[#1A1E29] border border-slate-800 rounded-2xl p-3 text-xs space-y-1 font-mono">
-            <div className="flex items-center justify-between text-slate-300">
-              <span>Location:</span>
-              <span className="font-bold text-white flex items-center gap-1.5">
-                <SvgFlag countryCode={otherUser.countryCode} nationality={otherUser.nationality} size="sm" />
-                <span>{otherUser.nationality}</span>
-              </span>
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-app-heading text-3xl font-medium" aria-hidden>
+              {displayName.slice(0, 1).toUpperCase()}
             </div>
-            <div className="flex items-center justify-between text-slate-300">
-              <span>Rate:</span>
-              <span className="font-extrabold text-amber-300">
-                🪙 {currentRatePerMin}/min {isFriendCall ? '(Friend Rate)' : ''}
+          )}
+        </div>
+
+        <div className="mt-5 flex items-center justify-center gap-2 min-w-0 max-w-full px-4">
+          <h2 className="font-display text-[1.375rem] font-medium text-app-heading truncate">
+            {displayName}
+          </h2>
+          {showAge && (
+            <span className="text-app-muted text-base shrink-0">{age}</span>
+          )}
+          {showFlag && (
+            <SvgFlag
+              countryCode={otherUser.countryCode}
+              nationality={otherUser.nationality}
+              size="sm"
+              shadow={false}
+              className="shrink-0"
+            />
+          )}
+        </div>
+
+        <div className={`mt-10 flex items-start justify-center ${isReceiver ? 'gap-14' : ''}`}>
+          <button
+            type="button"
+            onClick={rejectCall}
+            className="flex flex-col items-center gap-2 transition-transform active:scale-95"
+            aria-label="Cut"
+          >
+            <span className="w-16 h-16 rounded-full bg-[#E11D48] text-white flex items-center justify-center">
+              <PhoneOff className="w-7 h-7" />
+            </span>
+            <span className="text-xs font-medium text-app-muted">Cut</span>
+          </button>
+
+          {isReceiver && (
+            <button
+              type="button"
+              onClick={acceptCall}
+              className="flex flex-col items-center gap-2 transition-transform active:scale-95"
+              aria-label="Receive"
+            >
+              <span className="w-16 h-16 rounded-full bg-[#10B981] text-white flex items-center justify-center">
+                <Phone className="w-7 h-7" />
               </span>
-            </div>
-            <p className="text-[10px] text-slate-400 italic pt-1 border-t border-slate-800/80">
-              * Coins start burning only when both sides connect on the call.
-            </p>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="space-y-3 pt-2">
-            {isReceiver ? (
-              /* Receiver Acceptance Controls */
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={rejectCall}
-                  className="py-3.5 px-4 bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs rounded-2xl flex items-center justify-center space-x-2 shadow-lg shadow-rose-600/30 transition-transform active:scale-95"
-                >
-                  <PhoneOff className="w-4 h-4" />
-                  <span>Decline</span>
-                </button>
-
-                <button
-                  onClick={acceptCall}
-                  className="py-3.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-2xl flex items-center justify-center space-x-2 shadow-lg shadow-emerald-600/30 transition-transform active:scale-95"
-                >
-                  <PhoneCall className="w-4 h-4 animate-bounce" />
-                  <span>Accept Call</span>
-                </button>
-              </div>
-            ) : (
-              /* Caller Controls */
-              <div className="space-y-3">
-                <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 text-xs text-slate-300 font-mono flex items-center justify-center space-x-2">
-                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-                  <span>Waiting for {otherUser.name} to accept on her device...</span>
-                </div>
-
-                <button
-                  onClick={rejectCall}
-                  className="w-full py-3.5 bg-rose-600/20 hover:bg-rose-600/40 border border-rose-500/50 text-rose-300 hover:text-white font-bold text-xs rounded-2xl transition-colors flex items-center justify-center space-x-2"
-                >
-                  <PhoneOff className="w-4 h-4" />
-                  <span>Cancel Call</span>
-                </button>
-              </div>
-            )}
-          </div>
+              <span className="text-xs font-medium text-app-muted">Receive</span>
+            </button>
+          )}
         </div>
       </div>
     );

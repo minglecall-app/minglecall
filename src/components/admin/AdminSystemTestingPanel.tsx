@@ -7,6 +7,7 @@ import {
   type DiagnosticCategory,
   type DiagnosticModule,
 } from './systemTesting/modules';
+import { InfraStatusStrip } from './systemTesting/InfraStatusStrip';
 
 type SuiteStatus = 'idle' | 'running' | 'pass' | 'fail';
 
@@ -181,6 +182,8 @@ export const AdminSystemTestingPanel: React.FC = () => {
         </button>
       </div>
 
+      <InfraStatusStrip />
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Total tests run</p>
@@ -195,9 +198,10 @@ export const AdminSystemTestingPanel: React.FC = () => {
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 flex items-center gap-1.5">
             <Activity className="w-3.5 h-3.5 text-cyan-400" />
-            System health
+            Suite health
           </p>
           <p className={`mt-2 text-2xl font-bold ${totals.healthClass}`}>{totals.health}</p>
+          <p className="text-[10px] text-slate-500 mt-1">From last Run test results below</p>
         </div>
       </div>
 

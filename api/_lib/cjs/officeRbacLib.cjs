@@ -275,7 +275,7 @@ function permissionForAdminPath(path) {
   if (p.startsWith('admin/email') || p === 'admin/email-config') return 'email';
   if (p === 'admin/infra-config') return 'infra';
   if (p === 'admin/schema') return 'infra';
-  if (p === 'admin/system-diagnostics') return 'system-testing';
+  if (p === 'admin/system-diagnostics' || p === 'admin/infra-status') return 'system-testing';
   if (p === 'admin/k6-smoke') return 'k6-load';
   if (p === 'admin/api-health') return 'api-health';
   if (p === 'admin/delete-user') return 'users';

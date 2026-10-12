@@ -564,7 +564,248 @@ async function runServerDiagnostic(moduleId, input) {
   return runner(input || {});
 }
 
+/**
+ * Lightweight continuous status snapshot for admin UI (Live / Degraded / Unavailable).
+ * Never returns secret values. Safe to poll ~30–60s while System Testing is open.
+ */
+async function collectInfraStatus(input) {
+  const tAll = Date.now();
+  const profileId = String((input && input.profileId) || '').trim();
+  const systems = [];
+
+  // --- Redis presence ---
+  {
+    const t0 = Date.now();
+    const client = redisClient();
+    const inspect = inspectRedisEnv();
+    if (!client) {
+      systems.push({
+        id: 'redis-presence',
+        label: 'Redis Presence',
+        mode: inspect.tcpOnly ? 'degraded' : 'unavailable',
+        detail: configHint(inspect),
+        latencyMs: elapsed(t0),
+        checkedAt: nowIso(),
+      });
+    } else {
+      try {
+        const key = `diag:infra:${Date.now()}`;
+        await client.set(key, '1', { ex: 15 });
+        const got = await client.get(key);
+        await client.del(key);
+        const ok = String(got) === '1';
+        systems.push({
+          id: 'redis-presence',
+          label: 'Redis Presence',
+          mode: ok ? 'live' : 'degraded',
+          detail: ok
+            ? 'Upstash REST SET/GET/DEL ok — presence leases use Redis'
+            : 'Redis responded but diagnostic key mismatch',
+          latencyMs: elapsed(t0),
+          checkedAt: nowIso(),
+        });
+      } catch (err) {
+        systems.push({
+          id: 'redis-presence',
+          label: 'Redis Presence',
+          mode: 'unavailable',
+          detail: redactSecret((err && err.message) || 'Redis probe failed', activeRedisToken()),
+          latencyMs: elapsed(t0),
+          checkedAt: nowIso(),
+        });
+      }
+    }
+  }
+
+  // --- Supabase / pooler ---
+  {
+    const t0 = Date.now();
+    const pooledUrl = getPooledDatabaseUrl();
+    const described = describePooler(pooledUrl);
+    const client = createServiceClient();
+    let postgrestOk = false;
+    let postgrestDetail = 'Supabase service role is not configured';
+    if (client) {
+      const { error, count } = await client.from('profiles').select('id', { count: 'exact', head: true }).limit(1);
+      postgrestOk = !error;
+      postgrestDetail = error
+        ? error.message || 'PostgREST query failed'
+        : `PostgREST ok (profiles≈${count || 0})`;
+    }
+    let mode = 'unavailable';
+    let detail = postgrestDetail;
+    if (postgrestOk && described.configured && described.transactionPooler) {
+      mode = 'live';
+      detail = `${postgrestDetail}; transaction pooler ${described.host}:${described.port}`;
+    } else if (postgrestOk) {
+      mode = 'degraded';
+      detail = described.configured
+        ? `${postgrestDetail}; DATABASE_URL is not a :6543 transaction pooler (raw SQL at risk)`
+        : `${postgrestDetail}; no DATABASE_URL pooler (PostgREST-only is fine until raw SQL)`;
+    }
+    systems.push({
+      id: 'supabase-db',
+      label: 'Supabase / Pooler',
+      mode,
+      detail,
+      latencyMs: elapsed(t0),
+      checkedAt: nowIso(),
+    });
+  }
+
+  // --- Billing atomic path ---
+  {
+    const t0 = Date.now();
+    const client = createServiceClient();
+    if (!client || !profileId) {
+      systems.push({
+        id: 'billing-atomic',
+        label: 'Atomic Billing',
+        mode: 'unavailable',
+        detail: !profileId ? 'Admin profile missing' : 'Supabase service role not configured',
+        latencyMs: elapsed(t0),
+        checkedAt: nowIso(),
+      });
+    } else {
+      const { data, error } = await client.rpc('burn_call_coins_atomic', {
+        p_caller_id: profileId,
+        p_receiver_id: '',
+        p_tl_id: '',
+        p_call_id: `diag_status_${Date.now()}`,
+        p_billing_minute: 0,
+        p_coins_burned: 1,
+        p_host_coins_earned: 0,
+        p_tl_coins_earned: 0,
+        p_metadata: { diagnostic: true, status_probe: true },
+      });
+      if (error) {
+        systems.push({
+          id: 'billing-atomic',
+          label: 'Atomic Billing',
+          mode: 'unavailable',
+          detail: error.message || 'burn_call_coins_atomic RPC missing or failed',
+          latencyMs: elapsed(t0),
+          checkedAt: nowIso(),
+        });
+      } else {
+        const rejected =
+          data && data.success === false && /invalid/i.test(String(data.error_message || ''));
+        systems.push({
+          id: 'billing-atomic',
+          label: 'Atomic Billing',
+          mode: rejected ? 'live' : 'degraded',
+          detail: rejected
+            ? 'Atomic burn RPC rejects invalid input (safe path live)'
+            : 'RPC responded but did not reject invalid billing_minute=0 as expected',
+          latencyMs: elapsed(t0),
+          checkedAt: nowIso(),
+        });
+      }
+    }
+  }
+
+  // --- LiveKit ---
+  {
+    const t0 = Date.now();
+    const env = liveKitEnv();
+    const url = clean(process.env.LIVEKIT_URL || process.env.VITE_LIVEKIT_URL || '');
+    const keysOk =
+      Boolean(env.apiKey && env.apiSecret) &&
+      env.apiKey !== 'devkey' &&
+      env.apiSecret !== 'secret';
+    let mode = 'unavailable';
+    let detail = 'LIVEKIT_API_KEY / LIVEKIT_API_SECRET missing or placeholders';
+    if (keysOk && url) {
+      mode = 'live';
+      detail = 'LiveKit URL + signing keys configured (server-side mint)';
+    } else if (keysOk) {
+      mode = 'degraded';
+      detail = 'Signing keys present but LIVEKIT_URL is unset';
+    }
+    systems.push({
+      id: 'livekit',
+      label: 'LiveKit Tokens',
+      mode,
+      detail,
+      latencyMs: elapsed(t0),
+      checkedAt: nowIso(),
+    });
+  }
+
+  // --- Realtime (config + short subscribe) ---
+  {
+    const t0 = Date.now();
+    const client = createServiceClient();
+    if (!client) {
+      systems.push({
+        id: 'realtime-broadcast',
+        label: 'Realtime Broadcast',
+        mode: 'unavailable',
+        detail: 'Supabase service role not configured — cannot probe Realtime',
+        latencyMs: elapsed(t0),
+        checkedAt: nowIso(),
+      });
+    } else {
+      const channelName = `admin-diag-status-${Date.now().toString(36)}`;
+      const channel = client.channel(channelName, { config: { broadcast: { self: true } } });
+      try {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('Realtime subscribe timed out')), 4000);
+          channel.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+              clearTimeout(timer);
+              resolve(true);
+            } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+              clearTimeout(timer);
+              reject(new Error(`Realtime status ${status}`));
+            }
+          });
+        });
+        systems.push({
+          id: 'realtime-broadcast',
+          label: 'Realtime Broadcast',
+          mode: 'live',
+          detail: 'Supabase Realtime subscribe ok — broadcast path available',
+          latencyMs: elapsed(t0),
+          checkedAt: nowIso(),
+        });
+      } catch (err) {
+        systems.push({
+          id: 'realtime-broadcast',
+          label: 'Realtime Broadcast',
+          mode: 'degraded',
+          detail: `${(err && err.message) || 'Subscribe failed'} — clients may use poll / postgres_changes fallback`,
+          latencyMs: elapsed(t0),
+          checkedAt: nowIso(),
+        });
+      } finally {
+        try {
+          await client.removeChannel(channel);
+        } catch (_) {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  const liveCount = systems.filter((s) => s.mode === 'live').length;
+  const unavailableCount = systems.filter((s) => s.mode === 'unavailable').length;
+  const degradedCount = systems.filter((s) => s.mode === 'degraded').length;
+  let overall = 'healthy';
+  if (liveCount === systems.length) overall = 'healthy';
+  else if (unavailableCount >= 3) overall = 'critical';
+  else if (unavailableCount > 0 || degradedCount > 0) overall = 'degraded';
+
+  return {
+    checkedAt: nowIso(),
+    latencyMs: elapsed(tAll),
+    overall,
+    systems,
+  };
+}
+
 module.exports = {
   listServerDiagnosticModules,
   runServerDiagnostic,
+  collectInfraStatus,
 };
