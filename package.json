@@ -16,6 +16,7 @@
     "clean": "rm -rf dist server.js .next",
     "lint": "tsc --noEmit",
     "test:finance": "tsx --test shared/finance/phase7.verification.test.ts shared/finance/phase10.verification.test.ts shared/finance/phase6.trueup.qa.test.ts",
+    "test:auth-gated": "tsx --test src/utils/authGatedRequests.test.ts",
     "test:load": "echo Run k6 scripts in k6/ against a staging base URL"
   },
   "dependencies": {

@@ -52,6 +52,16 @@ import {
 import type { AppNavItem } from '../../shared/appNav';
 import { mapNavRow, mergeNavWithDefaults } from '../../shared/appNav';
 import { authFetch, getAccessToken, apiUrl, getWsUrl, SESSION_REPLACED_EVENT } from '../utils/apiClient';
+import {
+  applyAdminActiveCallsHttpResult,
+  chooseOfflineUnloadTransport,
+  createAdminActiveCallsPollState,
+  createUnloadOnceGate,
+  dispatchOfflineUnloadRequests,
+  resumeAdminActiveCallsPoll,
+  shouldAttemptAdminActiveCallsPoll,
+  type AdminActiveCallsPollState,
+} from '../utils/authGatedRequests';
 import { RealtimeSignaling, shouldUseRealtimeSignaling } from '../services/realtimeSignaling';
 import {
   fetchProfilesFromSupabase,
@@ -983,6 +993,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
   /** Cached access token for sync unload beacons (sendBeacon cannot set Authorization headers). */
   const accessTokenRef = useRef<string | null>(null);
+  /** Admin active-calls HTTP poll — suspended after 401/403 until fresh session. */
+  const adminActiveCallsPollStateRef = useRef<AdminActiveCallsPollState>(createAdminActiveCallsPollState());
+  const adminActiveCallsPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refreshAdminActiveCallsRef = useRef<() => Promise<void>>(async () => {});
   const adminActiveCallsRef = useRef<AdminActiveCall[]>(adminActiveCalls);
   const activeCallRef = useRef<CallSession | null>(activeCall);
   /**
@@ -1024,12 +1038,54 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     currentUserIdRef.current = currentUserId;
   }, [currentUserId]);
 
-  // Keep a sync-readable access token for beacons and auth-gated polling
+  const stopAdminActiveCallsPoll = useCallback(() => {
+    if (adminActiveCallsPollTimerRef.current) {
+      clearInterval(adminActiveCallsPollTimerRef.current);
+      adminActiveCallsPollTimerRef.current = null;
+    }
+  }, []);
+
+  const startAdminActiveCallsPoll = useCallback(() => {
+    stopAdminActiveCallsPoll();
+    if (!isLoggedInRef.current || !currentUserIdRef.current) return;
+    const me = usersRef.current.find((u) => u.id === currentUserIdRef.current);
+    if (me?.role !== 'admin') return;
+    adminActiveCallsPollStateRef.current = {
+      ...adminActiveCallsPollStateRef.current,
+      suspended: false,
+      inFlight: false,
+    };
+    const tick = () => {
+      void refreshAdminActiveCallsRef.current();
+    };
+    tick();
+    adminActiveCallsPollTimerRef.current = setInterval(tick, 2500);
+  }, [stopAdminActiveCallsPoll]);
+
+  // Keep a sync-readable access token for beacons and auth-gated polling.
+  // Also resume admin active-calls poll after a successful session refresh.
   useEffect(() => {
     let cancelled = false;
     const refreshToken = async () => {
       const token = await getAccessToken();
-      if (!cancelled) accessTokenRef.current = token;
+      if (cancelled) return;
+      accessTokenRef.current = token;
+      if (
+        token &&
+        adminActiveCallsPollStateRef.current.suspended &&
+        isLoggedInRef.current
+      ) {
+        const me = usersRef.current.find((u) => u.id === currentUserIdRef.current);
+        if (me?.role === 'admin') {
+          adminActiveCallsPollStateRef.current = resumeAdminActiveCallsPoll(
+            adminActiveCallsPollStateRef.current,
+            token
+          );
+          if (!adminActiveCallsPollTimerRef.current) {
+            startAdminActiveCallsPoll();
+          }
+        }
+      }
     };
     void refreshToken();
     const timer = setInterval(refreshToken, 60_000);
@@ -1037,7 +1093,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       cancelled = true;
       clearInterval(timer);
     };
-  }, [isLoggedIn, currentUserId]);
+  }, [isLoggedIn, currentUserId, startAdminActiveCallsPoll]);
 
   // -------------------------------------------------------------------------
   // Supabase Auth rehydration — session.user.id is the identity source of truth
@@ -3415,48 +3471,88 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const refreshAdminActiveCalls = async () => {
-    if (!isLoggedInRef.current) return;
     const me = usersRef.current.find((u) => u.id === currentUserIdRef.current);
-    if (me?.role !== 'admin') return;
-    const token = accessTokenRef.current || (await getAccessToken());
-    if (!token) return;
-    accessTokenRef.current = token;
+    const isAdmin = me?.role === 'admin';
+    // Fresh session only — never treat accessTokenRef as proof the JWT is valid.
+    const freshToken = await getAccessToken();
+    const gate = shouldAttemptAdminActiveCallsPoll({
+      isLoggedIn: Boolean(isLoggedInRef.current),
+      isAdmin: Boolean(isAdmin),
+      state: adminActiveCallsPollStateRef.current,
+      freshAccessToken: freshToken,
+    });
+    if (!gate.attempt) {
+      if (gate.reason === 'no_token' && isAdmin && isLoggedInRef.current) {
+        adminActiveCallsPollStateRef.current = {
+          ...adminActiveCallsPollStateRef.current,
+          suspended: true,
+        };
+        stopAdminActiveCallsPoll();
+      }
+      return;
+    }
+
+    accessTokenRef.current = freshToken!;
+    adminActiveCallsPollStateRef.current = {
+      ...adminActiveCallsPollStateRef.current,
+      inFlight: true,
+    };
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'admin:get_active_calls' }));
+      try {
+        wsRef.current.send(JSON.stringify({ type: 'admin:get_active_calls' }));
+      } catch {
+        /* ignore */
+      }
     }
     try {
       const res = await authFetch('/api/admin/active-calls');
+      if (res.status === 401 || res.status === 403) {
+        adminActiveCallsPollStateRef.current = applyAdminActiveCallsHttpResult(
+          adminActiveCallsPollStateRef.current,
+          res.status
+        );
+        stopAdminActiveCallsPoll();
+        return;
+      }
+      adminActiveCallsPollStateRef.current = applyAdminActiveCallsHttpResult(
+        adminActiveCallsPollStateRef.current,
+        res.status
+      );
       if (res.ok) {
         const data = await res.json();
         if (data.success && Array.isArray(data.activeCalls)) {
           if (data.activeCalls.length === 0) {
             setAdminActiveCalls([]);
           } else {
-            const mapped = data.activeCalls.map((sc: any) => mapServerCallToAdminCall(sc, usersRef.current));
+            const mapped = data.activeCalls.map((sc: any) =>
+              mapServerCallToAdminCall(sc, usersRef.current)
+            );
             setAdminActiveCalls(mapped);
           }
         }
       }
-    } catch (e) {
-      // quiet fallback
+    } catch {
+      adminActiveCallsPollStateRef.current = {
+        ...adminActiveCallsPollStateRef.current,
+        inFlight: false,
+      };
     }
   };
+  refreshAdminActiveCallsRef.current = refreshAdminActiveCalls;
 
-  // Periodic polling for active calls — admin sessions only (avoids 401 spam for guests/users)
+  // Periodic polling for active calls — admin only; stops on 401/403 until re-auth.
   useEffect(() => {
-    if (!isLoggedIn || !currentUserId) return;
-
-    const tick = () => {
-      const me = usersRef.current.find((u) => u.id === currentUserIdRef.current);
-      if (me?.role !== 'admin') return;
-      void refreshAdminActiveCalls();
+    if (!isLoggedIn || !currentUserId) {
+      stopAdminActiveCallsPoll();
+      adminActiveCallsPollStateRef.current = createAdminActiveCallsPollState();
+      return;
+    }
+    startAdminActiveCallsPoll();
+    return () => {
+      stopAdminActiveCallsPoll();
     };
-
-    tick();
-    const timer = setInterval(tick, 2500);
-    return () => clearInterval(timer);
-  }, [isLoggedIn, currentUserId]);
+  }, [isLoggedIn, currentUserId, startAdminActiveCallsPoll, stopAdminActiveCallsPoll]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -4515,30 +4611,41 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     document.addEventListener('visibilitychange', handleVisibility);
 
-    // Browser close / tab close / navigation away handler (beacon offline status to server & Supabase)
+    // Browser close / tab close / navigation away — offline best-effort (deduped).
+    // Prefer fetch+keepalive+Bearer; sendBeacon+body token only as fallback. No success assumed.
+    const unloadOnce = createUnloadOnceGate();
     const handleUnload = () => {
+      if (!unloadOnce.tryClaim()) return;
       const activeUid = currentUserIdRef.current;
       const accessToken = accessTokenRef.current;
-      if (activeUid && accessToken) {
-        const payload = JSON.stringify({ status: 'offline', accessToken });
-        try {
-          if (navigator.sendBeacon) {
-            const blob = new Blob([payload], { type: 'application/json' });
-            navigator.sendBeacon(apiUrl('/api/supabase/update-status'), blob);
-            navigator.sendBeacon(apiUrl('/api/presence'), blob);
-          } else {
-            authFetch('/api/supabase/update-status', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ status: 'offline' }),
-              keepalive: true,
-            }).catch(() => { });
-          }
-        } catch (e) { }
+      if (!activeUid || !accessToken) return;
+      try {
+        const transport = chooseOfflineUnloadTransport({
+          hasToken: true,
+          fetchKeepaliveAvailable: typeof fetch === 'function',
+          sendBeaconAvailable: typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function',
+        });
+        dispatchOfflineUnloadRequests({
+          token: accessToken,
+          resolveUrl: apiUrl,
+          transport,
+          fetchFn: (url, init) => {
+            void fetch(url, init).catch(() => {});
+          },
+          sendBeaconFn: (url, blob) => {
+            try {
+              return navigator.sendBeacon(url, blob);
+            } catch {
+              return false;
+            }
+          },
+        });
+      } catch {
+        /* best effort — unload must not throw */
       }
     };
-    window.addEventListener('beforeunload', handleUnload);
     window.addEventListener('pagehide', handleUnload);
+    window.addEventListener('beforeunload', handleUnload);
 
     // Supabase Realtime channel subscription for multi-device broadcast redundancy
     let unsubscribeSupabaseChat = () => { };
@@ -4910,17 +5017,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       const persistOffline = async (url: string) => {
         const absolute = apiUrl(url);
+        if (!token) return;
         try {
-          if (token && typeof navigator !== 'undefined' && navigator.sendBeacon) {
-            const blob = new Blob([offlineBody], { type: 'application/json' });
-            navigator.sendBeacon(absolute, blob);
-          }
           await fetch(absolute, {
             method: 'POST',
             headers,
             body: offlineBody,
             keepalive: true,
           });
+          return;
+        } catch {
+          /* fall through to beacon */
+        }
+        try {
+          if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+            const blob = new Blob([offlineBody], { type: 'application/json' });
+            navigator.sendBeacon(absolute, blob);
+          }
         } catch {
           /* ignore — best effort */
         }
