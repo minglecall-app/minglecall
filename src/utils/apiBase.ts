@@ -8,11 +8,22 @@ function trimSlash(url: string): string {
   return url.replace(/\/+$/, '');
 }
 
+function readEnv(key: string): string {
+  try {
+    const fromVite = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.[key];
+    if (fromVite) return String(fromVite).trim().replace(/^["']|["']$/g, '');
+  } catch {
+    /* Next.js does not populate import.meta.env the way Vite does */
+  }
+  const fromProcess = typeof process !== 'undefined' ? process.env[key] : '';
+  return String(fromProcess || '').trim().replace(/^["']|["']$/g, '');
+}
+
 /** Absolute API origin (empty string = same-origin / relative paths). */
 export function getApiBaseUrl(): string {
-  const raw = String(import.meta.env.VITE_API_BASE_URL || '').trim();
+  const raw = readEnv('NEXT_PUBLIC_API_BASE_URL') || readEnv('VITE_API_BASE_URL');
   if (!raw) return '';
-  return trimSlash(raw.replace(/^["']|["']$/g, ''));
+  return trimSlash(raw);
 }
 
 export function isSplitDeploy(): boolean {
@@ -39,9 +50,7 @@ export function apiUrl(pathOrUrl: string): string {
 
 /** WebSocket signaling URL for Express `/ws`. */
 export function getWsUrl(): string {
-  const explicit = String(import.meta.env.VITE_WS_URL || '')
-    .trim()
-    .replace(/^["']|["']$/g, '');
+  const explicit = readEnv('NEXT_PUBLIC_WS_URL') || readEnv('VITE_WS_URL');
   if (explicit) return explicit;
 
   const apiBase = getApiBaseUrl();
@@ -62,7 +71,7 @@ export function getWsUrl(): string {
 
 export function getDeployModeLabel(): string {
   if (isSplitDeploy()) return 'split (Vercel SPA → Node API)';
-  if (typeof import.meta !== 'undefined' && import.meta.env?.PROD) {
+  if (typeof process !== 'undefined' && process.env.NODE_ENV === 'production') {
     return 'vercel-only (same-origin /api + Realtime)';
   }
   return 'same-origin (local Express + /ws)';

@@ -544,6 +544,8 @@ export interface SystemSettings {
   creatorTargetGoldBonusUSD?: number;
   /** UTC HH:mm when Financial Module period close may run (default 00:00). */
   periodCloseUtcTime?: string;
+  /** Control Center close-job cadence. Daily is Hobby-safe. Faster values need Vercel Pro plus a vercel.json push. */
+  financeCronCadence?: 'daily' | 'every_12h' | 'every_6h' | 'hourly';
   /** When true, period-end settlement batches are the intended cash-out path. */
   settlementEnabled?: boolean;
   peakHoursStart?: string;
@@ -642,9 +644,10 @@ export interface DailyRewardRecord {
   updatedAt?: string;
 }
 
-export type FlagSizeVariant = 'xs' | 'sm' | 'card' | 'md' | 'lg' | 'admin' | 'xl' | '2xl';
+export type FlagSizeVariant = 'xxs' | 'xs' | 'sm' | 'card' | 'md' | 'lg' | 'admin' | 'xl' | '2xl';
 
 export interface FlagSizesConfig {
+  xxs: number; // height in px (default: 12 -> width 18)
   xs: number; // height in px (default: 14 -> width 21)
   sm: number; // height in px (default: 18 -> width 27)
   card: number; // height in px (default: 18 -> width 27)

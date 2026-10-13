@@ -104,6 +104,7 @@ export const INITIAL_SYSTEM_SETTINGS: SystemSettings = {
   quickMatchGiftSplitPlatform: 30,
   quickMatchAutoFallbackOnlineCreators: true,
   flagSizes: {
+    xxs: 12,
     xs: 14,
     sm: 18,
     card: 18,
@@ -146,6 +147,7 @@ export const INITIAL_SYSTEM_SETTINGS: SystemSettings = {
 };
 
 export const DEFAULT_FLAG_SIZES = {
+  xxs: 12,    // 18px x 12px (smaller than XS; discovery card)
   xs: 14,     // 21px x 14px
   sm: 18,     // 27px x 18px (Discovery Grid, Swipe Deck, Country Selector)
   card: 18,   // 27px x 18px

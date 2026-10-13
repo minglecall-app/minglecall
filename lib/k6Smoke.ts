@@ -3,8 +3,8 @@
  */
 import { createRequire } from 'node:module';
 
-const require = createRequire(import.meta.url);
-const smoke = require('../api/_lib/cjs/k6Smoke.js') as {
+const nodeRequire = createRequire(import.meta.url);
+const smoke = nodeRequire('../api/_lib/cjs/k6Smoke.js') as {
   listK6SmokeScenarios: () => string[];
   runK6Smoke: (scenarioId: string, input?: K6SmokeInput) => Promise<K6SmokeResult | null>;
   DEFAULT_CONCURRENCY: number;

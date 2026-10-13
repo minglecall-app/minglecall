@@ -1,21 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/Header';
 import { DiscoveryGrid } from './components/discovery/DiscoveryGrid';
 import { SwipeMatchDeck } from './components/discovery/SwipeMatchDeck';
 import { ProfileDetailModal } from './components/discovery/ProfileDetailModal';
-import { MomentsFeed } from './components/social/MomentsFeed';
 import { QuickMatchRoulette } from './components/discovery/QuickMatchRoulette';
-import { FemaleEarningsDashboard } from './components/earnings/FemaleEarningsDashboard';
-import { FemaleCallLogsView } from './components/earnings/FemaleCallLogsView';
-import { HostDashboard } from './components/earnings/HostDashboard';
-import { AdminDashboard } from './components/admin/AdminDashboard';
-import { TeamLeaderDashboard } from './components/teamleader/TeamLeaderDashboard';
 import { UserProfilePage } from './components/profile/UserProfilePage';
 import { PublicProfilePage } from './components/profile/PublicProfilePage';
 import { HomePage } from './components/home/HomePage';
 import { PolicyDetailModal } from './components/home/PolicyDetailModal';
-import { VideoCallStudio } from './components/videocall/VideoCallStudio';
 import { PostCallRatingModal } from './components/videocall/PostCallRatingModal';
 import { CoinStoreModal } from './components/store/CoinStoreModal';
 import { AuthModal } from './components/auth/AuthModal';
@@ -32,6 +25,39 @@ import { CheckCircle2, AlertTriangle, Info, AlertCircle, X } from 'lucide-react'
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { isSetupLocation } from './navigation/appRoutes';
 import { useAppNavigation } from './navigation/useAppNavigation';
+
+/** Heavy screens — split so Vercel refresh does not parse admin/video on first paint. */
+const MomentsFeed = lazy(() =>
+  import('./components/social/MomentsFeed').then((m) => ({ default: m.MomentsFeed }))
+);
+const FemaleEarningsDashboard = lazy(() =>
+  import('./components/earnings/FemaleEarningsDashboard').then((m) => ({
+    default: m.FemaleEarningsDashboard,
+  }))
+);
+const FemaleCallLogsView = lazy(() =>
+  import('./components/earnings/FemaleCallLogsView').then((m) => ({
+    default: m.FemaleCallLogsView,
+  }))
+);
+const HostDashboard = lazy(() =>
+  import('./components/earnings/HostDashboard').then((m) => ({ default: m.HostDashboard }))
+);
+const AdminDashboard = lazy(() =>
+  import('./components/admin/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
+);
+const TeamLeaderDashboard = lazy(() =>
+  import('./components/teamleader/TeamLeaderDashboard').then((m) => ({
+    default: m.TeamLeaderDashboard,
+  }))
+);
+const VideoCallStudio = lazy(() =>
+  import('./components/videocall/VideoCallStudio').then((m) => ({ default: m.VideoCallStudio }))
+);
+
+const RouteFallback: React.FC = () => (
+  <div className="flex min-h-[40vh] items-center justify-center text-sm text-app-muted">Loading…</div>
+);
 
 
 
@@ -259,40 +285,54 @@ const MainApp: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'moments' && (
-          <MomentsFeed
-            onStartCall={(id) => startCall(id)}
-            onOpenChat={(id) => setChatUserId(id)}
-            onOpenStore={() => setIsStoreOpen(true)}
-          />
-        )}
+        <Suspense fallback={<RouteFallback />}>
+          {activeTab === 'moments' && (
+            <MomentsFeed
+              onStartCall={(id) => startCall(id)}
+              onOpenChat={(id) => setChatUserId(id)}
+              onOpenStore={() => setIsStoreOpen(true)}
+            />
+          )}
 
-        {isHostStudioSurface && (
-          <HostDashboard
-            appSurface={activeTab === 'call_logs' ? 'call_logs' : 'earnings'}
-            onAppSurfaceChange={(surface) => navigateTab(surface)}
-            onOpenChat={(id) => setChatUserId(id)}
-            onStartCall={(id) => startCall(id)}
-            onOpenProfile={(id) => openProfileAndClear(id)}
-          />
-        )}
+          {isHostStudioSurface && (
+            <HostDashboard
+              appSurface={activeTab === 'call_logs' ? 'call_logs' : 'earnings'}
+              onAppSurfaceChange={(surface) => navigateTab(surface)}
+              onOpenChat={(id) => setChatUserId(id)}
+              onStartCall={(id) => startCall(id)}
+              onOpenProfile={(id) => openProfileAndClear(id)}
+            />
+          )}
 
-        {activeTab === 'earnings' && !isHostStudioSurface && (
-          <FemaleEarningsDashboard
-            onOpenStore={() => setIsStoreOpen(true)}
-            onStartCall={(id) => startCall(id)}
-            onOpenChat={(id) => setChatUserId(id)}
-            onOpenCallLogs={() => navigateTab('call_logs')}
-          />
-        )}
+          {activeTab === 'earnings' && !isHostStudioSurface && (
+            <FemaleEarningsDashboard
+              onOpenStore={() => setIsStoreOpen(true)}
+              onStartCall={(id) => startCall(id)}
+              onOpenChat={(id) => setChatUserId(id)}
+              onOpenCallLogs={() => navigateTab('call_logs')}
+            />
+          )}
 
-        {activeTab === 'call_logs' && !isHostStudioSurface && (
-          <FemaleCallLogsView
-            onOpenChat={(id) => setChatUserId(id)}
-            onStartCall={(id) => startCall(id)}
-            onOpenProfile={(id) => openProfileAndClear(id)}
-          />
-        )}
+          {activeTab === 'call_logs' && !isHostStudioSurface && (
+            <FemaleCallLogsView
+              onOpenChat={(id) => setChatUserId(id)}
+              onStartCall={(id) => startCall(id)}
+              onOpenProfile={(id) => openProfileAndClear(id)}
+            />
+          )}
+
+          {activeTab === 'team_leader' &&
+            isLoggedIn &&
+            (currentUser.role === 'team_leader' || currentUser.role === 'admin') && (
+              <TeamLeaderDashboard
+                onStartCall={(id) => startCall(id)}
+                onOpenChat={(id) => handleOpenChat(id)}
+                onNavigateToTab={(tab) => navigateTab(tab)}
+              />
+            )}
+
+          {activeTab === 'admin' && isLoggedIn && currentUser.role === 'admin' && <AdminDashboard />}
+        </Suspense>
 
         {activeTab === 'profile' && (
           <UserProfilePage
@@ -301,16 +341,6 @@ const MainApp: React.FC = () => {
             onNavigateToTab={(tab) => navigateTab(tab)}
           />
         )}
-
-        {activeTab === 'team_leader' && isLoggedIn && (currentUser.role === 'team_leader' || currentUser.role === 'admin') && (
-          <TeamLeaderDashboard
-            onStartCall={(id) => startCall(id)}
-            onOpenChat={(id) => handleOpenChat(id)}
-            onNavigateToTab={(tab) => navigateTab(tab)}
-          />
-        )}
-
-        {activeTab === 'admin' && isLoggedIn && currentUser.role === 'admin' && <AdminDashboard />}
       </main>
 
       {viewingProfileId && (
@@ -350,7 +380,11 @@ const MainApp: React.FC = () => {
       )}
 
       {/* Global Active Call Studio */}
-      {activeCall && <VideoCallStudio onOpenStore={() => setIsStoreOpen(true)} />}
+      {activeCall && (
+        <Suspense fallback={null}>
+          <VideoCallStudio onOpenStore={() => setIsStoreOpen(true)} />
+        </Suspense>
+      )}
 
       {/* Global Modals */}
       <CoinStoreModal isOpen={isStoreOpen} onClose={() => setIsStoreOpen(false)} />

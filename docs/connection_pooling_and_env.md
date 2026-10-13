@@ -1,20 +1,29 @@
-# Connection Pooling & Environment (High-Concurrency)
+# Connection Pooling & Environment (Next.js + Vercel)
+
+## Host model
+
+- **One app:** Next.js App Router for localhost and Vercel.
+- **Dev:** `npm run dev` → `next dev` (loads `.env.local`).
+- **Prod:** Vercel Framework Preset **Next.js**, build `next build`, output directory empty.
+- **API:** `app/api/[[...path]]/route.ts` dispatches into `server/` via `getApp()`. Same-origin `/api/*`.
+- **Legacy only:** `npm run dev:legacy-express` runs `server.ts` as a process. Not the Vercel path.
 
 ## Supabase connection pooling
 
-### PostgREST / `@supabase/supabase-js` (default for this app)
+### PostgREST / `@supabase/supabase-js` (default)
 
-- Next.js Route Handlers, Express, and Vercel CJS handlers use **`@supabase/supabase-js`** against the project **HTTPS API URL** (`https://<ref>.supabase.co`).
-- That path hits **PostgREST**, which already uses a server-side pool. Do **not** put a Postgres `host:6543` string into `VITE_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL`.
-- Client factories: `lib/nextAuth.ts` (`createServiceClient`), `api/_lib/cjs/helpers.js`, `server/supabaseAdmin.ts`.
+- Route Handlers and `server/` use **`@supabase/supabase-js`** against the project **HTTPS API URL** (`https://<ref>.supabase.co`).
+- That path hits **PostgREST**, which already pools. Do **not** put a Postgres `host:6543` string into `NEXT_PUBLIC_SUPABASE_URL` / `VITE_SUPABASE_URL`.
+- Client factories: `lib/nextAuth.ts`, `server/supabaseAdmin.ts`. Browser client: `src/lib/supabase.ts` (reads inlined `NEXT_PUBLIC_SUPABASE_*`).
+- Some admin diagnostics still `require` CJS under `api/_lib/` (kept as libraries, not public Vercel functions).
 
 ### Direct SQL drivers (PgBouncer / Supavisor)
 
-- Prefer the **Transaction** pooler (port **`6543`**) for any direct `postgres` / `pg` / `postgres.js` / Prisma / Drizzle connections from serverless or workers.
-- Set `DATABASE_URL` (or `SUPABASE_DB_URL` / `POSTGRES_URL`) to the pooler URI from Supabase Dashboard → **Connect** → **Transaction pooler**.
-- Helper: `lib/supabaseDb.ts` → `getPooledDatabaseUrl()` (also exported from `api/_lib/cjs/helpers.js` as `getPooledDatabaseUrl`).
-- Never use the direct session port **`5432`** from Vercel functions — it exhausts Postgres connection limits under concurrency.
-- Transaction mode does not support prepared statements; disable them in the driver when using `:6543`.
+- Prefer the **Transaction** pooler (port **`6543`**) for any direct `postgres` / `pg` / Prisma / Drizzle use from serverless.
+- Set `DATABASE_URL` to the pooler URI from Supabase Dashboard → **Connect** → **Transaction pooler**.
+- Helper: `lib/supabaseDb.ts` → `getPooledDatabaseUrl()` (also available from `api/_lib` helpers where still used).
+- Never use direct session port **`5432`** from Vercel functions — it exhausts connections under concurrency.
+- Transaction mode: disable prepared statements in the driver when using `:6543`.
 
 Example:
 
@@ -28,10 +37,11 @@ DATABASE_URL=postgresql://postgres.<PROJECT_REF>:<PASSWORD>@aws-0-<REGION>.poole
 | --- | --- | --- |
 | Discovery / `GET /api/users` | 50 | `created_at` (DESC, `lt`) |
 | `fetchProfilesPageFromSupabase` | 50 | `created_at` |
-| Conversation history (`GET /api/messages`, `/api/messages/conversation/:id`) | 30–50 (default 40) | `created_at` (DESC, `lt`) → `nextCursor` |
+| Conversation history (`GET /api/messages`, …) | 30–50 (default 40) | `created_at` (DESC, `lt`) → `nextCursor` |
 | Recent inbox hydrate | 50 max | newest-first page |
+| Call logs (browser hydrate) | ~100 (user) / higher for admin staff | newest-first; prefer scoped to current user |
 
-Never run unconstrained `select * from profiles` / `messages` for discovery or chat history.
+Never run unconstrained `select * from profiles` / `messages` / `call_logs` for discovery or default UI hydrate.
 
 ## Indexes (see `supabase_schema.sql`)
 
@@ -45,26 +55,36 @@ Never run unconstrained `select * from profiles` / `messages` for discovery or c
 | `idx_profiles_created_at (created_at DESC)` | Discovery cursor pages |
 | `idx_profiles_discovery_banned_created (...) WHERE not banned` | Non-banned discovery |
 
-There is **no** `conversation_id` column on `messages` today — pair indexes are the supported model. Do not add a `conversation_id` index until a conversations table exists.
+There is **no** `conversation_id` column on `messages` today — pair indexes are the supported model.
 
-## Vercel / Next.js environment variables
+## Environment variables (local + Vercel)
+
+Copy names into **`.env.local`** and into **Vercel → Settings → Environment Variables** (Production + Preview). After changing Vercel env, **redeploy**.
 
 | Variable | Client? | Purpose |
 | --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` or `VITE_SUPABASE_URL` | Yes | Supabase project HTTPS URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` or `VITE_SUPABASE_ANON_KEY` | Yes | Anon key (RLS-protected) |
-| `SUPABASE_SERVICE_ROLE_KEY` | **No** | Server-only admin client |
-| `DATABASE_URL` / `SUPABASE_DB_URL` | **No** | Optional; Transaction pooler `:6543` for raw SQL only |
-| `UPSTASH_REDIS_REST_URL` or `KV_REST_API_URL` | **No** | Redis **HTTPS REST** endpoint (required). `KV_URL` / `REDIS_URL` as `rediss://` are TCP-only and are **not** enough for presence |
-| `UPSTASH_REDIS_REST_TOKEN` or `KV_REST_API_TOKEN` | **No** | Redis **read-write** REST token. `KV_REST_API_READ_ONLY_TOKEN` alone cannot write heartbeats |
-| Local / Preview | — | Vercel Storage vars must be enabled for that environment; for local: `vercel env pull .env.local` then restart |
-| `LIVEKIT_URL` | **No** (config may expose URL) | LiveKit WebSocket URL |
-| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | **No** | Token minting |
-| `R2_*` / SMTP / payment secrets | **No** | Server-only |
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Preferred public Supabase HTTPS URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Preferred anon key (RLS) |
+| `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | Yes* | Still accepted; `next.config.mjs` copies them into `NEXT_PUBLIC_*` at build/dev |
+| `SUPABASE_SERVICE_ROLE_KEY` | **No** | Server admin client |
+| `DATABASE_URL` | **No** | Optional Transaction pooler `:6543` for raw SQL |
+| `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` | **No** | Preferred Redis REST pair |
+| `KV_REST_API_URL` + `KV_REST_API_TOKEN` | **No** | Alternate Redis REST pair (Vercel KV / Upstash) |
+| `KV_REST_API_READ_ONLY_TOKEN` | — | **Not enough** for heartbeats (no writes) |
+| `KV_URL` / `REDIS_URL` as `rediss://` | — | TCP only; REST client ignores them |
+| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | **No** (URL may be returned to client after auth) | Token minting |
+| `R2_*` | **No** | Presigned uploads |
+| `SMTP_*` / `RESEND_API_KEY` | **No** | OTP / email |
+| `CRON_SECRET` or `FINANCE_JOB_SECRET` | **No** | Finance close job auth (required in production) |
+| `FINANCE_JOB_ACTOR_USER_ID` | **No** | Profile id for cron settlement actor |
+| `FINANCE_WEBHOOK_SECRET` | **No** | Payment webhooks when enabled |
+| `SETUP_MASTER_KEY` / `SETUP_LOCKED` / `ALLOW_FACTORY_RESET` | **No** | Server setup lock |
+| `NEXT_PUBLIC_API_BASE_URL` / `VITE_API_BASE_URL` | — | **Leave unset** on Vercel (same-origin `/api`) |
 
-During the Vite → Next migration, both `VITE_*` and `NEXT_PUBLIC_*` names are accepted for Supabase public config.
+\*Browser must see URL/anon via inlined `NEXT_PUBLIC_*`. Prefer setting `NEXT_PUBLIC_*` on Vercel, or keep `VITE_*` and rely on `next.config.mjs` mapping.
 
 ## Presence durability rule
 
 - Routine heartbeats update **Redis only** (`presence:{userId}`, TTL 60–90s).
 - Write `profiles.online_status` / `profiles.last_seen_at` only on login, logout, or significant status transitions — never on every heartbeat tick.
+- Without Redis REST credentials, presence must not fall back to Postgres under load (configure Redis before 10k tests).

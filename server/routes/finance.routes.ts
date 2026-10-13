@@ -20,6 +20,10 @@ import {
   TEAM_LEADER_ROLES,
 } from '../middleware/auth';
 import { sensitiveActionLimiter } from '../middleware/rateLimit';
+import {
+  FINANCE_CRON_CADENCES,
+  normalizeFinanceCronCadence,
+} from '../../shared/finance/cronCadence';
 import { getSupabaseAdmin, isSupabaseAdminConfigured } from '../supabaseAdmin';
 import {
   closeDuePeriods,
@@ -290,6 +294,44 @@ function requireDb(res: Response): boolean {
   return true;
 }
 
+async function readFinanceCronCadence(): Promise<{ value: ReturnType<typeof normalizeFinanceCronCadence>; lastRunAt: string | null }> {
+  const fallback = { value: normalizeFinanceCronCadence('daily'), lastRunAt: null as string | null };
+  if (!isSupabaseAdminConfigured()) return fallback;
+  try {
+    const admin = getSupabaseAdmin();
+    if (!admin) return fallback;
+    const { data, error } = await admin
+      .from('system_configs')
+      .select('finance_cron_cadence, finance_cron_last_run_at')
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return fallback;
+    return {
+      value: normalizeFinanceCronCadence((data as any).finance_cron_cadence),
+      lastRunAt: (data as any).finance_cron_last_run_at || null,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+async function stampFinanceCronRun(): Promise<void> {
+  if (!isSupabaseAdminConfigured()) return;
+  try {
+    const admin = getSupabaseAdmin();
+    if (!admin) return;
+    const { data } = await admin.from('system_configs').select('id').limit(1).maybeSingle();
+    const id = (data as any)?.id;
+    if (!id) return;
+    await admin
+      .from('system_configs')
+      .update({ finance_cron_last_run_at: new Date().toISOString() } as any)
+      .eq('id', id);
+  } catch {
+    /* column may not be applied yet */
+  }
+}
+
 export function createFinanceRouter(runtime: ServerRuntime): Router {
   const router = Router();
 
@@ -454,6 +496,24 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
   const handleCloseDuePeriods = async (req: Request, res: Response) => {
     try {
       const body = req.body || {};
+      const cadence = await readFinanceCronCadence();
+      const lastRunAt = cadence.lastRunAt;
+      const rule = FINANCE_CRON_CADENCES[cadence.value];
+      if (lastRunAt) {
+        const elapsed = Date.now() - new Date(lastRunAt).getTime();
+        if (Number.isFinite(elapsed) && elapsed >= 0 && elapsed < rule.minGapMs) {
+          return res.status(200).json({
+            success: true,
+            data: {
+              skipped: true,
+              cadence: cadence.value,
+              expression: rule.expression,
+              lastRunAt,
+              reason: 'Sooner than the Control Center schedule',
+            },
+          });
+        }
+      }
       const actorFromAdmin = authProfileId(req) || null;
       const actorUserId =
         (typeof body.actorUserId === 'string' && body.actorUserId.trim()) ||
@@ -476,6 +536,10 @@ export function createFinanceRouter(runtime: ServerRuntime): Router {
           }
         },
       });
+
+      if (result.success) {
+        await stampFinanceCronRun();
+      }
 
       const httpStatus = result.success ? 200 : 500;
       return res.status(httpStatus).json({

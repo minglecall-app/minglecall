@@ -62,7 +62,12 @@ function isMissingGalleryVideosColumnError(err: unknown): boolean {
   return /gallery_videos/i.test(msg) && (/column/i.test(msg) || /schema cache/i.test(msg));
 }
 
-let supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim();
+let supabaseUrl = (
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  process.env.SUPABASE_URL ||
+  ''
+).trim();
 // Never fall back to anon/public key — that would silently lose service-role privileges
 // and break RLS-bypass admin mutations (or worse, look "configured" while failing writes).
 let supabaseServiceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
@@ -70,13 +75,13 @@ let supabaseServiceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 let supabaseAdmin: SupabaseClient | null = null;
 
 export function updateSupabaseRuntimeConfig(url?: string, key?: string) {
+  // Keep secrets in module state only. Do not copy the service role into process.env,
+  // which can leak into a later client bundle or a shared serverless isolate.
   if (url !== undefined) {
     supabaseUrl = String(url).trim();
-    process.env.VITE_SUPABASE_URL = supabaseUrl;
   }
   if (key !== undefined) {
     supabaseServiceKey = String(key).trim();
-    process.env.SUPABASE_SERVICE_ROLE_KEY = supabaseServiceKey;
   }
   // Re-create client on next getSupabaseAdmin call
   supabaseAdmin = null;

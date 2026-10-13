@@ -4,8 +4,8 @@
  */
 import { createRequire } from 'node:module';
 
-const require = createRequire(import.meta.url);
-const diagnostics = require('../api/_lib/cjs/systemDiagnostics.js') as {
+const nodeRequire = createRequire(import.meta.url);
+const diagnostics = nodeRequire('../api/_lib/cjs/systemDiagnostics.js') as {
   listServerDiagnosticModules: () => string[];
   runServerDiagnostic: (moduleId: string, input: DiagnosticInput) => Promise<DiagnosticResult | null>;
   collectInfraStatus: (input: { profileId?: string }) => Promise<InfraStatusSnapshot>;

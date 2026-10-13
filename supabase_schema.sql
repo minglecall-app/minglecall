@@ -524,6 +524,10 @@ ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS streak_boost_duration
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS min_daily_active_hours_for_streak NUMERIC DEFAULT 2.0;
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS free_daily_login_coins INT DEFAULT 20;
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS period_close_utc_time TEXT DEFAULT '00:00';
+ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS finance_cron_cadence TEXT DEFAULT 'daily';
+ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS finance_cron_last_run_at TIMESTAMPTZ;
+COMMENT ON COLUMN public.system_configs.finance_cron_cadence IS
+  'Admin Control Center close-job cadence: daily (Hobby), every_12h, every_6h, hourly (Pro). Vercel still fires from vercel.json; this value skips runs that are sooner than the selected gap.';
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS settlement_enabled BOOLEAN DEFAULT true;
 ALTER TABLE public.system_configs ADD COLUMN IF NOT EXISTS r2_profile_video_quota_mb INT DEFAULT 100;
 COMMENT ON COLUMN public.system_configs.r2_profile_video_quota_mb IS
@@ -1587,6 +1591,7 @@ DROP POLICY IF EXISTS "authenticated update blocked_users" ON public.blocked_use
 DROP POLICY IF EXISTS "owner/admin delete blocked_users" ON public.blocked_users;
 
 DROP POLICY IF EXISTS "public select creator_goals" ON public.creator_goals;
+DROP POLICY IF EXISTS "authenticated select creator_goals" ON public.creator_goals;
 DROP POLICY IF EXISTS "authenticated insert creator_goals" ON public.creator_goals;
 DROP POLICY IF EXISTS "authenticated update creator_goals" ON public.creator_goals;
 DROP POLICY IF EXISTS "admin delete creator_goals" ON public.creator_goals;
@@ -1605,7 +1610,9 @@ DROP POLICY IF EXISTS "authenticated update user_daily_rewards" ON public.user_d
 DROP POLICY IF EXISTS "admin delete user_daily_rewards" ON public.user_daily_rewards;
 
 -- PROFILES
-CREATE POLICY "public select profiles" ON public.profiles FOR SELECT USING (true);
+-- NOTE: Early policies are temporary stubs. Hardened policies + column REVOKE run in section 18+
+-- (authenticated browse without wallet/email columns; owner update; service_role for admin APIs).
+CREATE POLICY "public select profiles" ON public.profiles FOR SELECT USING (auth.uid() IS NOT NULL);
 CREATE POLICY "authenticated insert profiles" ON public.profiles FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY "authenticated update profiles" ON public.profiles FOR UPDATE USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY "admin delete profiles" ON public.profiles
@@ -1643,8 +1650,8 @@ CREATE POLICY "admin delete matches" ON public.matches
     )
   );
 
--- MESSAGES
-CREATE POLICY "public select messages" ON public.messages FOR SELECT USING (true);
+-- MESSAGES (superseded by participants-only policies in section 18+)
+CREATE POLICY "public select messages" ON public.messages FOR SELECT USING (false);
 CREATE POLICY "authenticated insert messages" ON public.messages FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY "authenticated update messages" ON public.messages FOR UPDATE USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY "admin delete messages" ON public.messages
@@ -1660,8 +1667,8 @@ CREATE POLICY "admin delete messages" ON public.messages
     )
   );
 
--- CALL LOGS
-CREATE POLICY "public select call_logs" ON public.call_logs FOR SELECT USING (true);
+-- CALL LOGS (superseded by participants-only policies in section 18+)
+CREATE POLICY "public select call_logs" ON public.call_logs FOR SELECT USING (false);
 CREATE POLICY "authenticated insert call_logs" ON public.call_logs FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY "authenticated update call_logs" ON public.call_logs FOR UPDATE USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY "admin delete call_logs" ON public.call_logs
@@ -1677,8 +1684,8 @@ CREATE POLICY "admin delete call_logs" ON public.call_logs
     )
   );
 
--- FRIEND REQUESTS
-CREATE POLICY "public select friend_requests" ON public.friend_requests FOR SELECT USING (true);
+-- FRIEND REQUESTS (superseded by participants-only policies later)
+CREATE POLICY "public select friend_requests" ON public.friend_requests FOR SELECT USING (false);
 CREATE POLICY "authenticated insert friend_requests" ON public.friend_requests FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY "authenticated update friend_requests" ON public.friend_requests FOR UPDATE USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY "admin delete friend_requests" ON public.friend_requests
@@ -1694,8 +1701,8 @@ CREATE POLICY "admin delete friend_requests" ON public.friend_requests
     )
   );
 
--- PAYOUT REQUESTS (Phase 7: SELECT/DELETE only ? no client INSERT/UPDATE)
-CREATE POLICY "public select payout_requests" ON public.payout_requests FOR SELECT USING (true);
+-- PAYOUT REQUESTS (Phase 7: SELECT/DELETE only; early stub closed — owner policy in section 18+)
+CREATE POLICY "public select payout_requests" ON public.payout_requests FOR SELECT USING (false);
 CREATE POLICY "admin delete payout_requests" ON public.payout_requests
   FOR DELETE USING (
     EXISTS (
@@ -1939,9 +1946,10 @@ CREATE POLICY "owner/admin delete favorites" ON public.favorites
     )
   );
 
-CREATE POLICY "public select blocked_users" ON public.blocked_users FOR SELECT USING (true);
-CREATE POLICY "authenticated insert blocked_users" ON public.blocked_users FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
-CREATE POLICY "authenticated update blocked_users" ON public.blocked_users FOR UPDATE USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
+-- Blocked users: early stub closed; owner/participant policies in section 19.
+CREATE POLICY "public select blocked_users" ON public.blocked_users FOR SELECT USING (false);
+CREATE POLICY "authenticated insert blocked_users" ON public.blocked_users FOR INSERT WITH CHECK (false);
+CREATE POLICY "authenticated update blocked_users" ON public.blocked_users FOR UPDATE USING (false) WITH CHECK (false);
 CREATE POLICY "owner/admin delete blocked_users" ON public.blocked_users
   FOR DELETE USING (
     user_id = auth.uid()::text
@@ -1957,9 +1965,8 @@ CREATE POLICY "owner/admin delete blocked_users" ON public.blocked_users
   );
 
 -- CREATOR GOALS
-CREATE POLICY "public select creator_goals" ON public.creator_goals FOR SELECT USING (true);
-CREATE POLICY "authenticated insert creator_goals" ON public.creator_goals FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
-CREATE POLICY "authenticated update creator_goals" ON public.creator_goals FOR UPDATE USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
+-- creator_goals: public progress readable when authenticated; writes via service_role only.
+CREATE POLICY "authenticated select creator_goals" ON public.creator_goals FOR SELECT USING (auth.uid() IS NOT NULL);
 CREATE POLICY "admin delete creator_goals" ON public.creator_goals
   FOR DELETE USING (
     EXISTS (
@@ -2309,8 +2316,9 @@ DROP POLICY IF EXISTS "public select wallet_ledger" ON public.wallet_ledger;
 DROP POLICY IF EXISTS "service role manage wallet_ledger" ON public.wallet_ledger;
 DROP POLICY IF EXISTS "authenticated insert wallet_ledger" ON public.wallet_ledger;
 DROP POLICY IF EXISTS "owner select wallet_ledger" ON public.wallet_ledger;
-CREATE POLICY "public select wallet_ledger" ON public.wallet_ledger FOR SELECT USING (true);
-CREATE POLICY "authenticated insert wallet_ledger" ON public.wallet_ledger FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+-- Closed early; owner-only SELECT applied in section 18+. Inserts via service_role / RPC only.
+CREATE POLICY "public select wallet_ledger" ON public.wallet_ledger FOR SELECT USING (false);
+CREATE POLICY "authenticated insert wallet_ledger" ON public.wallet_ledger FOR INSERT WITH CHECK (false);
 
 -- ============================================================================
 -- 16.55 FINANCIAL MODULE ? settlement periods, immutable journal, batches
@@ -3577,6 +3585,8 @@ DROP POLICY IF EXISTS "authenticated update profiles" ON public.profiles;
 DROP POLICY IF EXISTS "authenticated select profiles" ON public.profiles;
 DROP POLICY IF EXISTS "owner insert profiles" ON public.profiles;
 DROP POLICY IF EXISTS "owner update profiles" ON public.profiles;
+-- Discovery may list profiles when authenticated. Wallet/email columns are revoked below
+-- so clients cannot SELECT coin_balance / earnings_coins / email via the anon key.
 CREATE POLICY "authenticated select profiles" ON public.profiles FOR SELECT USING (auth.uid() IS NOT NULL);
 CREATE POLICY "owner insert profiles" ON public.profiles FOR INSERT WITH CHECK (
   auth.uid() IS NOT NULL AND (id = auth.uid()::text OR auth_id = auth.uid() OR id = public.current_profile_id())
@@ -3584,6 +3594,10 @@ CREATE POLICY "owner insert profiles" ON public.profiles FOR INSERT WITH CHECK (
 CREATE POLICY "owner update profiles" ON public.profiles FOR UPDATE
   USING (id = public.current_profile_id() OR public.is_admin_user())
   WITH CHECK (id = public.current_profile_id() OR public.is_admin_user());
+
+-- Clients (anon + authenticated) must not read wallets/email via PostgREST.
+-- Own wallet is loaded through service-role APIs (e.g. GET /api/v1/users/me).
+REVOKE SELECT (coin_balance, earnings_coins, email) ON public.profiles FROM anon, authenticated;
 
 DROP POLICY IF EXISTS "public select messages" ON public.messages;
 DROP POLICY IF EXISTS "authenticated insert messages" ON public.messages;

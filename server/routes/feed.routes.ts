@@ -3,13 +3,16 @@ import { randomUUID } from 'crypto';
 import type { ServerRuntime } from '../runtimeTypes';
 import { requireAuth } from '../middleware/auth';
 import { getSupabaseAdmin, isSupabaseAdminConfigured, upsertProfileAdmin } from '../supabaseAdmin';
-import { appendGiftEarnLedger, loadGiftSharePercents } from '../finance/walletLedgerWrite';
-import { computeGiftCoinSplit } from '../../shared/finance/economyGift';
+import { loadGiftSharePercents } from '../finance/walletLedgerWrite';
+import {
+  computeGiftCoinSplit,
+  DEFAULT_TIP_COINS,
+  isGiftEligibleHostRole,
+  TIP_CATALOG_COINS,
+} from '../../shared/finance/economyGift';
 
 const MAX_CAPTION = 2000;
 const MAX_MEDIA_URL = 2048;
-const DEFAULT_TIP_COINS = 20;
-const MAX_TIP_COINS = 200;
 
 function authUserId(req: any): string {
   return String(req.profileId || req.user?.id || '');
@@ -92,13 +95,7 @@ async function loadLikedPostIds(client: any, userId: string, postIds: string[]) 
 }
 
 function isEligibleTipHost(profile: any): boolean {
-  if (!profile) return false;
-  const role = String(profile.role || '');
-  return (
-    role === 'female_creator' ||
-    role === 'female_host' ||
-    Boolean(profile.team_leader_id || profile.created_by_id)
-  );
+  return isGiftEligibleHostRole(profile?.role);
 }
 
 export function createFeedRouter(runtime: ServerRuntime) {
@@ -377,7 +374,8 @@ export function createFeedRouter(runtime: ServerRuntime) {
 
   /**
    * POST /api/v1/feed/:postId/tip
-   * Body: { coins? } — default 20. Server derives host/tl earnings; ignores client earn fields.
+   * Body: { coins?, idempotencyKey? } — coins must be from TIP_CATALOG_COINS (default 20).
+   * Debit/credit via gift_spend_atomic only.
    */
   router.post('/:postId/tip', requireAuth, async (req, res) => {
     try {
@@ -389,7 +387,6 @@ export function createFeedRouter(runtime: ServerRuntime) {
       if (!senderId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
       if (!postId) return sendError(res, 400, 'postId required', 'INVALID_POST');
 
-      // Reject client-supplied earn fields (non-negotiable)
       if (
         req.body?.hostCoinsEarned != null ||
         req.body?.tlCoinsEarned != null ||
@@ -405,7 +402,21 @@ export function createFeedRouter(runtime: ServerRuntime) {
 
       let tipCoins = Number(req.body?.coins);
       if (!Number.isFinite(tipCoins) || tipCoins <= 0) tipCoins = DEFAULT_TIP_COINS;
-      tipCoins = Math.min(MAX_TIP_COINS, Math.max(1, Math.round(tipCoins)));
+      tipCoins = Math.round(tipCoins);
+      if (!(TIP_CATALOG_COINS as readonly number[]).includes(tipCoins)) {
+        return sendError(
+          res,
+          400,
+          `Tip amount must be one of: ${TIP_CATALOG_COINS.join(', ')}`,
+          'INVALID_TIP_AMOUNT'
+        );
+      }
+
+      const clientIdem =
+        typeof req.body?.idempotencyKey === 'string'
+          ? sanitizeText(req.body.idempotencyKey, 200)
+          : '';
+      const idempotencyKey = clientIdem || `tip:${postId}:${senderId}:${tipCoins}`;
 
       const client = getSupabaseAdmin()!;
       const { data: post, error: postErr } = await client
@@ -421,24 +432,9 @@ export function createFeedRouter(runtime: ServerRuntime) {
         return sendError(res, 400, 'You cannot tip your own moment', 'SELF_TIP');
       }
 
-      const { data: sender, error: senderErr } = await client
-        .from('profiles')
-        .select('id, coin_balance, name')
-        .eq('id', senderId)
-        .maybeSingle();
-      if (senderErr) throw senderErr;
-      if (!sender) return sendError(res, 404, 'Sender not found', 'SENDER_NOT_FOUND');
-
-      const balance = Number(sender.coin_balance || 0);
-      if (balance < tipCoins) {
-        return sendError(res, 400, 'Insufficient coins', 'INSUFFICIENT_COINS');
-      }
-
       const { data: creator, error: creatorErr } = await client
         .from('profiles')
-        .select(
-          'id, name, role, earnings_coins, total_gifts_received_count, team_leader_id, created_by_id'
-        )
+        .select('id, name, role, team_leader_id, created_by_id, earnings_coins')
         .eq('id', creatorId)
         .maybeSingle();
       if (creatorErr) throw creatorErr;
@@ -446,7 +442,7 @@ export function createFeedRouter(runtime: ServerRuntime) {
 
       const shares = await loadGiftSharePercents(client);
       const eligible = isEligibleTipHost(creator);
-      const tlId = creator.team_leader_id || creator.created_by_id || null;
+      const tlId = eligible ? creator.team_leader_id || creator.created_by_id || null : null;
       const split = computeGiftCoinSplit({
         giftCost: tipCoins,
         hostSharePercent: shares.host,
@@ -454,66 +450,49 @@ export function createFeedRouter(runtime: ServerRuntime) {
         hasTeamLeader: Boolean(tlId),
         hostEligible: eligible,
       });
-      const hostCoinsEarned = split.hostCoins;
-      const tlCoinsEarned = split.tlCoins;
 
-      const newSenderBalance = Math.max(0, balance - tipCoins);
-      const { error: debitErr } = await client
-        .from('profiles')
-        .update({ coin_balance: newSenderBalance })
-        .eq('id', senderId)
-        .gte('coin_balance', tipCoins);
-      if (debitErr) {
-        console.error('[feed/tip] debit:', debitErr.message);
-        return sendError(res, 500, 'Failed to debit coins', 'DEBIT_FAILED');
+      const { data: rpcRaw, error: rpcErr } = await client.rpc('gift_spend_atomic', {
+        p_sender_id: senderId,
+        p_receiver_id: creatorId,
+        p_tl_id: tlId ? String(tlId) : null,
+        p_coins: tipCoins,
+        p_host_coins: split.hostCoins,
+        p_tl_coins: split.tlCoins,
+        p_idempotency_key: idempotencyKey,
+        p_metadata: {
+          kind: 'moment_tip',
+          postId,
+          tipCoins,
+          hostSharePercent: split.hostSharePercent,
+          tlSharePercent: split.tlSharePercent,
+          platformCoins: split.platformCoins,
+        },
+      });
+
+      if (rpcErr) {
+        console.error('[feed/tip] RPC error:', rpcErr.message);
+        return sendError(res, 500, 'Tip billing failed', 'TIP_RPC_FAILED');
       }
 
-      // Verify debit applied (optimistic concurrency)
-      const { data: senderAfter } = await client
-        .from('profiles')
-        .select('coin_balance')
-        .eq('id', senderId)
-        .maybeSingle();
-      if (Number(senderAfter?.coin_balance) > newSenderBalance) {
-        // Race lost — abort
-        return sendError(res, 409, 'Balance changed; tip not applied', 'BALANCE_RACE');
+      const rpcResult = typeof rpcRaw === 'string' ? JSON.parse(rpcRaw) : rpcRaw;
+      if (!rpcResult?.success) {
+        const code = rpcResult?.error_code || 'TIP_FAILED';
+        const status = code === 'INSUFFICIENT_BALANCE' ? 400 : 500;
+        return res.status(status).json({
+          success: false,
+          error: {
+            message: rpcResult?.error_message || 'Tip failed',
+            code,
+          },
+        });
       }
 
-      let newHostEarnings = Number(creator.earnings_coins || 0);
-      if (hostCoinsEarned > 0) {
-        newHostEarnings = newHostEarnings + hostCoinsEarned;
-        const { error: creditErr } = await client
-          .from('profiles')
-          .update({
-            earnings_coins: newHostEarnings,
-            total_gifts_received_count: Number(creator.total_gifts_received_count || 0) + 1,
-          })
-          .eq('id', creatorId);
-        if (creditErr) {
-          console.error('[feed/tip] credit host:', creditErr.message);
-          // Best-effort refund sender
-          await client.from('profiles').update({ coin_balance: balance }).eq('id', senderId);
-          return sendError(res, 500, 'Failed to credit host', 'CREDIT_FAILED');
-        }
-      }
+      const newSenderBalance = Number(rpcResult.new_sender_balance || 0);
+      const newHostEarnings = Number(rpcResult.new_host_earnings || 0);
+      const newTlEarnings = Number(rpcResult.new_tl_earnings || 0);
+      const hostCoinsEarned = Number(rpcResult.host_coins_earned ?? split.hostCoins) || 0;
+      const tlCoinsEarned = Number(rpcResult.tl_coins_earned ?? split.tlCoins) || 0;
 
-      let newTlEarnings: number | null = null;
-      if (tlId && tlCoinsEarned > 0) {
-        const { data: tl } = await client
-          .from('profiles')
-          .select('id, earnings_coins')
-          .eq('id', tlId)
-          .maybeSingle();
-        if (tl) {
-          newTlEarnings = Number(tl.earnings_coins || 0) + tlCoinsEarned;
-          await client
-            .from('profiles')
-            .update({ earnings_coins: newTlEarnings })
-            .eq('id', tlId);
-        }
-      }
-
-      // Sync in-memory runtime if present
       const memSender = serverUsers.get(senderId);
       if (memSender) {
         memSender.coinBalance = newSenderBalance;
@@ -527,7 +506,7 @@ export function createFeedRouter(runtime: ServerRuntime) {
         serverUsers.set(creatorId, memHost);
         upsertProfileAdmin(memHost).catch(() => {});
       }
-      if (tlId && newTlEarnings != null) {
+      if (tlId && tlCoinsEarned > 0) {
         const memTl = serverUsers.get(String(tlId));
         if (memTl) {
           memTl.earningsCoins = newTlEarnings;
@@ -536,37 +515,8 @@ export function createFeedRouter(runtime: ServerRuntime) {
         }
       }
 
-      // Always write GIFT_DEBIT for tip debit; HOST/TL when eligible
-      {
-        const sourceKey = `tip:${postId}:${senderId}:${Date.now()}`;
-        const ledgerResult = await appendGiftEarnLedger({
-          client,
-          sourceKey,
-          senderUserId: senderId,
-          giftCost: tipCoins,
-          senderBalanceAfter: newSenderBalance,
-          hostUserId: eligible && hostCoinsEarned > 0 ? creatorId : null,
-          hostCoins: hostCoinsEarned,
-          hostBalanceAfter: newHostEarnings,
-          tlUserId: tlId && tlCoinsEarned > 0 ? String(tlId) : null,
-          tlCoins: tlCoinsEarned,
-          tlBalanceAfter: newTlEarnings ?? 0,
-          kind: 'moment_tip',
-          metadata: {
-            postId,
-            tipCoins,
-            senderId,
-            hostSharePercent: split.hostSharePercent,
-            tlSharePercent: split.tlSharePercent,
-            platformCoins: split.platformCoins,
-          },
-        });
-        if (!ledgerResult.success) {
-          console.warn('[feed/tip] wallet_ledger:', ledgerResult.error);
-        }
-        if (eligible && hostCoinsEarned > 0) {
-          recordCreatorEarnCoins?.(creatorId, { giftCoins: hostCoinsEarned });
-        }
+      if (eligible && hostCoinsEarned > 0 && !rpcResult.duplicate) {
+        recordCreatorEarnCoins?.(creatorId, { giftCoins: hostCoinsEarned });
       }
 
       try {
@@ -581,12 +531,13 @@ export function createFeedRouter(runtime: ServerRuntime) {
           postId,
           creatorId,
           tipCoins,
-          senderBalance: Number(senderAfter?.coin_balance ?? newSenderBalance),
-          hostEarnings: hostCoinsEarned > 0 ? newHostEarnings : Number(creator.earnings_coins || 0),
+          senderBalance: newSenderBalance,
+          hostEarnings: newHostEarnings,
           hostCoinsEarned,
           tlCoinsEarned,
           tlId: tlId || undefined,
-          tlEarnings: newTlEarnings ?? undefined,
+          tlEarnings: tlId ? newTlEarnings : undefined,
+          duplicate: Boolean(rpcResult.duplicate),
         },
       });
     } catch (err: any) {

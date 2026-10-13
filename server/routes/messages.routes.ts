@@ -223,7 +223,7 @@ export function createMessagesRouter(runtime: ServerRuntime) {
       try {
         // CJS helper — persist-first targeted Broadcast on user:{id} + conversation:{pair}
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { broadcastChatMessage } = require('../../api/_lib/cjs/realtimeBroadcast');
+        const { broadcastChatMessage } = await import('../../lib/realtimeBroadcast');
         await broadcastChatMessage(client, mapped, [senderId, receiverId]);
       } catch (broadcastErr: any) {
         console.warn(

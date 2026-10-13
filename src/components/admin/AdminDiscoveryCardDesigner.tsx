@@ -553,6 +553,7 @@ export const AdminDiscoveryCardDesigner: React.FC = () => {
                   onChange={(e) => updateVpField('flagSize', e.target.value as DiscoveryCardViewportLayout['flagSize'])}
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200"
                 >
+                  <option value="xxs">xxs</option>
                   <option value="xs">xs</option>
                   <option value="sm">sm</option>
                   <option value="md">md</option>

@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import fs from 'fs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
@@ -39,7 +40,7 @@ import {
   loadGiftSharePercents,
   resolveCatalogGiftById,
 } from './server/finance';
-import { computeGiftCoinSplit } from './shared/finance/economyGift';
+import { computeGiftCoinSplit, isGiftEligibleHostRole } from './shared/finance/economyGift';
 import {
   testR2Connectivity,
   updateR2RuntimeConfig,
@@ -78,7 +79,9 @@ import {
   createFinanceRouter,
   createPayoutRouter,
   createUsersPublicRouter,
+  createGoalsRouter,
 } from './server/routes';
+import { mapPublicProfileRow, PUBLIC_PROFILE_SELECT } from './server/routes/users.routes';
 import {
   requireAuth,
   requireAdmin,
@@ -117,6 +120,10 @@ interface CallState {
 
 /** Vercel Fluid/serverless: do not listen(); export the Express app instead. */
 const IS_VERCEL = Boolean(process.env.VERCEL);
+/** True only when this file is the process entry (`tsx server.ts`). Next.js imports must not listen. */
+const IS_DIRECT_RUN = process.argv[1]
+  ? pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+  : false;
 
 async function startServer(): Promise<express.Express> {
   const app = express();
@@ -2064,6 +2071,7 @@ async function startServer(): Promise<express.Express> {
   app.use('/api/v1/reviews', createReviewsRouter(runtime));
   app.use('/api/v1/feed', createFeedRouter(runtime));
   app.use('/api/v1/users', createUsersPublicRouter(runtime));
+  app.use('/api/v1/goals', createGoalsRouter(runtime));
   app.use('/api/messages', createMessagesRouter(runtime));
   app.use('/api/v1/finance', createFinanceRouter(runtime));
   app.use('/api', createPayoutRouter(runtime));
@@ -2088,14 +2096,130 @@ async function startServer(): Promise<express.Express> {
   // USER & PRESENCE SYNCHRONIZATION API ENDPOINTS
   // =========================================================================
 
-  // GET All Authoritative Users
-  app.get('/api/users', requireAuth, (req, res) => {
-    res.json({
-      success: true,
-      users: getFormattedUsers(),
-      count: serverUsers.size,
-      timestamp: Date.now(),
-    });
+  // GET paginated public directory (no wallets/emails). Cursor = created_at ISO.
+  app.get('/api/users', requireAuth, async (req, res) => {
+    try {
+      const limitRaw = Number(req.query?.limit);
+      const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 50, 1), 50);
+      const cursor =
+        typeof req.query?.cursor === 'string' && req.query.cursor.trim()
+          ? req.query.cursor.trim()
+          : null;
+
+      if (!isSupabaseAdminConfigured()) {
+        // Local fallback: strip sensitive fields from memory map, still paginate.
+        const all = getFormattedUsers()
+          .filter((u) => !(u as any).isBanned)
+          .sort((a, b) => {
+            const ta = new Date(a.createdAt || 0).getTime();
+            const tb = new Date(b.createdAt || 0).getTime();
+            return tb - ta;
+          });
+        let start = 0;
+        if (cursor) {
+          const idx = all.findIndex((u) => String(u.createdAt || '') === cursor);
+          start = idx >= 0 ? idx + 1 : 0;
+        }
+        const page = all.slice(start, start + limit);
+        const nextCursor =
+          page.length === limit && page[page.length - 1]?.createdAt
+            ? String(page[page.length - 1].createdAt)
+            : null;
+        const users = page.map((u) =>
+          mapPublicProfileRow({
+            id: u.id,
+            name: u.name,
+            gender: u.gender,
+            age: u.age,
+            dob: u.dob,
+            nationality: u.nationality,
+            country_code: u.countryCode,
+            spoken_languages: u.spokenLanguages,
+            bio: u.bio,
+            extended_bio: u.extendedBio,
+            location_city: u.locationCity,
+            zodiac: u.zodiac,
+            interests: u.interests,
+            tags: u.tags,
+            interested_in: u.interestedIn,
+            avatar_url: u.avatarUrl,
+            gallery: u.gallery,
+            gallery_videos: u.galleryVideos,
+            intro_video_url: u.introVideoUrl,
+            is_verified: u.isVerified,
+            online_status: u.onlineStatus,
+            role: u.role,
+            response_rate: u.responseRate,
+            hourly_coin_rate: u.hourlyCoinRate,
+            rating_score: u.ratingScore,
+            total_reviews_count: u.totalReviewsCount,
+            total_calls_hosted: u.totalCallsHosted,
+            exact_location: u.exactLocation,
+            is_using_mock_location: u.isUsingMockLocation,
+            mock_location_city: u.mockLocationCity,
+            mock_location_country: u.mockLocationCountry,
+            mock_location_country_code: u.mockLocationCountryCode,
+            created_at: u.createdAt,
+            is_banned: false,
+          })
+        );
+        return res.json({
+          success: true,
+          users,
+          count: users.length,
+          nextCursor,
+          timestamp: Date.now(),
+        });
+      }
+
+      const supabase = getSupabaseAdmin()!;
+      let query = supabase
+        .from('profiles')
+        .select(PUBLIC_PROFILE_SELECT)
+        .or('is_banned.is.null,is_banned.eq.false')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (cursor) {
+        query = query.lt('created_at', cursor);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        console.error('[GET /api/users]', error.message);
+        return res.status(500).json({
+          success: false,
+          error: { message: 'Failed to load directory', code: 'DIRECTORY_FAILED' },
+        });
+      }
+
+      const rows = (Array.isArray(data) ? data : []) as Array<Record<string, any>>;
+      const users = rows.map((row) => mapPublicProfileRow(row)).filter(Boolean);
+      const last = rows[rows.length - 1];
+      const nextCursor =
+        rows.length === limit && last?.created_at ? String(last.created_at) : null;
+
+      // Overlay live Redis/memory presence when available
+      const withPresence = users.map((u: any) => {
+        if (!u?.id) return u;
+        const live = getAuthoritativeStatus(u.id);
+        return live ? { ...u, onlineStatus: live } : u;
+      });
+
+      return res.json({
+        success: true,
+        users: withPresence,
+        count: withPresence.length,
+        nextCursor,
+        timestamp: Date.now(),
+      });
+    } catch (err: any) {
+      console.error('[GET /api/users] exception:', err);
+      return res.status(500).json({
+        success: false,
+        error: { message: err?.message || 'Failed to load directory', code: 'DIRECTORY_FAILED' },
+      });
+    }
   });
 
   // POST Create or Update User (Registration / Profile edits from any device)
@@ -3606,11 +3730,7 @@ async function startServer(): Promise<express.Express> {
         }
       }
 
-      const isEligibleHost =
-        receiver &&
-        (receiver.role === 'female_creator' ||
-          receiver.role === 'female_host' ||
-          Boolean(receiver.teamLeaderId || receiver.createdById));
+      const isEligibleHost = receiver && isGiftEligibleHostRole(receiver.role);
 
       const shares = await loadGiftSharePercents(supabase);
       const tlId = isEligibleHost
@@ -4133,10 +4253,10 @@ async function startServer(): Promise<express.Express> {
   });
 
 
-  // Vite / static SPA: only when running as a long-lived Node process (not Vercel CDN).
-  if (!IS_VERCEL) {
+  // Legacy Express+Vite process only. Next.js (`next dev` / Vercel) calls getApp() and must not listen.
+  if (IS_DIRECT_RUN && !IS_VERCEL) {
     if (process.env.NODE_ENV !== 'production') {
-      const { createServer: createViteServer } = await import('vite');
+      const { createServer: createViteServer } = await import(/* webpackIgnore: true */ 'vite');
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: 'spa',
@@ -4163,7 +4283,7 @@ async function startServer(): Promise<express.Express> {
 let cachedApp: express.Express | null = null;
 let bootPromise: Promise<express.Express> | null = null;
 
-async function getApp(): Promise<express.Express> {
+export async function getApp(): Promise<express.Express> {
   if (cachedApp) return cachedApp;
   if (!bootPromise) {
     bootPromise = startServer()
@@ -4180,8 +4300,8 @@ async function getApp(): Promise<express.Express> {
   return bootPromise;
 }
 
-// Local Node: start immediately so listen() binds.
-if (!IS_VERCEL) {
+// Local Node entry only. Importing this module from Next.js must not bind a port.
+if (IS_DIRECT_RUN && !IS_VERCEL) {
   getApp().catch((err) => {
     console.error('Fatal error starting LiveCall server:', err);
     process.exit(1);

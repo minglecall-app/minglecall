@@ -26,7 +26,8 @@ export type AdminSubTabKey =
   | 'cms-payout-cards'
   | 'cms-toasts'
   | 'cms-seo'
-  | 'office-rbac';
+  | 'office-rbac'
+  | 'cron-schedule';
 
 /** Non-tab sidebar actions (Setup Wizard / Reset Data). */
 export type AdminNavActionKey = 'setup-wizard' | 'reset-data';
@@ -187,6 +188,13 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         icon: 'Shield',
         kind: 'tab',
         title: 'Office staff roles, feature permissions, and create office users',
+      },
+      {
+        id: 'cron-schedule',
+        label: 'Close job schedule',
+        icon: 'CalendarClock',
+        kind: 'tab',
+        title: 'Daily on Hobby. Switch to hourly after Pro, then push vercel.json.',
       },
     ],
   },

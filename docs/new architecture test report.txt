@@ -1,3 +1,11 @@
+*** OUTDATED SNAPSHOT (pre–Next.js cutover) ***
+This report describes an older dual path: Vite SPA + Express `npm run dev` vs early Next routes.
+Current host: Next.js App Router only (`npm run dev` = next dev; Vercel = next build).
+API: app/api/[[...path]]/route.ts. Presence: Redis REST. See architecture_engineering_rules.md
+and connection_pooling_and_env.md for the live rules. Re-run k6 against staging before trusting numbers below.
+
+---
+
 All six scripts are in k6/ and k6 inspect accepts them on k6 v2.2.0. They are not safe to run as written: local .env uses the hosted Supabase project documented as production, Redis is unset, and several checks treat failures as success.
 
 No tests were executed and nothing was sent to minglecall.com.

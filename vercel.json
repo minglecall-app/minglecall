@@ -1,56 +1,8 @@
 {
-  "buildCommand": "npm run vercel-build",
-  "outputDirectory": "dist",
-  "framework": null,
   "crons": [
     {
       "path": "/api/v1/finance/jobs/close-due-periods",
-      "schedule": "0 * * * *"
+      "schedule": "0 0 * * *"
     }
-  ],
-  "rewrites": [
-    {
-      "source": "/api/(health|ping|r2-test)",
-      "destination": "/api/$1"
-    },
-    {
-      "source": "/api/storage/test-connection",
-      "destination": "/api/storage/test-connection"
-    },
-    {
-      "source": "/api/livekit/(config|token)",
-      "destination": "/api/livekit/$1"
-    },
-    {
-      "source": "/api/admin/create-team-leader",
-      "destination": "/api/admin/create-team-leader"
-    },
-    {
-      "source": "/api/users",
-      "destination": "/api/users"
-    },
-    {
-      "source": "/api/:path*",
-      "destination": "/api/router?path=:path*"
-    },
-    {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
-    }
-  ],
-  "functions": {
-    "api/health.js": { "maxDuration": 10, "memory": 256 },
-    "api/ping.js": { "maxDuration": 10, "memory": 256 },
-    "api/r2-test.js": { "maxDuration": 30, "memory": 512 },
-    "api/storage/test-connection.js": { "maxDuration": 30, "memory": 512 },
-    "api/livekit/config.js": { "maxDuration": 15, "memory": 512 },
-    "api/livekit/token.js": { "maxDuration": 15, "memory": 512 },
-    "api/admin/create-team-leader.js": { "maxDuration": 30, "memory": 512 },
-    "api/users.js": { "maxDuration": 30, "memory": 512 },
-    "api/router.js": {
-      "maxDuration": 30,
-      "memory": 1024,
-      "includeFiles": "supabase_schema.sql"
-    }
-  }
+  ]
 }

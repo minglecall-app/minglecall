@@ -1,20 +1,16 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Database } from '../types/database.types';
 
-// Client-side environment variables with universal process.env fallback
-const getEnvVar = (key: string): string => {
-  try {
-    if (typeof import.meta !== 'undefined' && (import.meta as any).env && (import.meta as any).env[key]) {
-      return ((import.meta as any).env[key] || '').trim();
-    }
-  } catch {}
-  try {
-    if (typeof process !== 'undefined' && process.env && process.env[key]) {
-      return (process.env[key] || '').trim();
-    }
-  } catch {}
-  return '';
-};
+/**
+ * Next inlines only a direct `process.env.NEXT_PUBLIC_*` read.
+ * next.config copies VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY into those
+ * names at `next dev` and at the Vercel `next build`, so one read works in both.
+ */
+function readInlinedPublic(value: string | undefined): string {
+  return String(value || '')
+    .trim()
+    .replace(/^["']|["']$/g, '');
+}
 
 const CLIENT_SUPABASE_OVERRIDE_KEY = 'minglecall_supabase_client_override';
 
@@ -80,20 +76,8 @@ function writeClientOverride(url: string, anonKey: string) {
   }
 }
 
-const envUrl = (
-  getEnvVar('NEXT_PUBLIC_SUPABASE_URL') ||
-  getEnvVar('VITE_SUPABASE_URL') ||
-  getEnvVar('SUPABASE_URL')
-)
-  .trim()
-  .replace(/^["']|["']$/g, '');
-const envAnonKey = (
-  getEnvVar('NEXT_PUBLIC_SUPABASE_ANON_KEY') ||
-  getEnvVar('VITE_SUPABASE_ANON_KEY') ||
-  getEnvVar('SUPABASE_ANON_KEY')
-)
-  .trim()
-  .replace(/^["']|["']$/g, '');
+const envUrl = readInlinedPublic(process.env.NEXT_PUBLIC_SUPABASE_URL);
+const envAnonKey = readInlinedPublic(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 
 function isEnvSupabaseConfigured(url: string, anonKey: string): boolean {
   return Boolean(
@@ -107,7 +91,7 @@ function isEnvSupabaseConfigured(url: string, anonKey: string): boolean {
 }
 
 /**
- * Prefer build-time / .env VITE_* when present (local + Vercel).
+ * Prefer the inlined NEXT_PUBLIC_ values (filled from VITE_SUPABASE_* on local and Vercel).
  * localStorage override only fills gaps when env is missing — prevents localhost
  * from silently using a different Supabase project than production.
  */

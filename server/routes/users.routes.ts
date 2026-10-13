@@ -100,7 +100,7 @@ export function mapPublicProfileRow(p: any) {
   };
 }
 
-const PUBLIC_PROFILE_SELECT = [
+export const PUBLIC_PROFILE_SELECT = [
   'id',
   'name',
   'gender',
@@ -140,6 +140,50 @@ const PUBLIC_PROFILE_SELECT = [
 export function createUsersPublicRouter(_runtime: ServerRuntime) {
   const router = Router();
 
+  /** GET /api/v1/users/me — own profile including wallet (service-role). */
+  router.get('/me', requireAuth, async (req, res) => {
+    try {
+      if (!isSupabaseAdminConfigured()) {
+        return sendError(res, 503, 'Profiles backend unavailable', 'NO_ADMIN');
+      }
+      const viewerId = authUserId(req);
+      if (!viewerId) return sendError(res, 401, 'Unauthorized', 'UNAUTHORIZED');
+
+      const client = getSupabaseAdmin()!;
+      const { data, error } = await client
+        .from('profiles')
+        .select(
+          `${PUBLIC_PROFILE_SELECT}, coin_balance, earnings_coins, email, auth_id` as string
+        )
+        .eq('id', viewerId)
+        .maybeSingle();
+
+      if (error) {
+        console.error('[users/me]', error.message);
+        return sendError(res, 500, 'Failed to load profile', 'LOAD_FAILED');
+      }
+      const row = data as Record<string, any> | null;
+      if (!row) return sendError(res, 404, 'Profile not found', 'NOT_FOUND');
+
+      const pub = mapPublicProfileRow(row);
+      return res.json({
+        success: true,
+        data: {
+          user: {
+            ...pub,
+            email: row.email || undefined,
+            authId: row.auth_id || undefined,
+            coinBalance: Number(row.coin_balance || 0),
+            earningsCoins: Number(row.earnings_coins || 0),
+          },
+        },
+      });
+    } catch (err: any) {
+      console.error('[users/me] exception:', err);
+      return sendError(res, 500, err?.message || 'Failed to load profile', 'LOAD_FAILED');
+    }
+  });
+
   /** GET /api/v1/users/:id/public */
   router.get('/:id/public', requireAuth, async (req, res) => {
     try {
@@ -160,7 +204,7 @@ export function createUsersPublicRouter(_runtime: ServerRuntime) {
 
       let { data, error } = await client
         .from('profiles')
-        .select(PUBLIC_PROFILE_SELECT)
+        .select(PUBLIC_PROFILE_SELECT as string)
         .eq('id', targetId)
         .maybeSingle();
 
@@ -173,7 +217,7 @@ export function createUsersPublicRouter(_runtime: ServerRuntime) {
           )
           .eq('id', targetId)
           .maybeSingle();
-        data = fallback.data;
+        data = fallback.data as unknown as typeof data;
         error = fallback.error;
       }
 
@@ -181,11 +225,12 @@ export function createUsersPublicRouter(_runtime: ServerRuntime) {
         console.error('[users/:id/public]', error.message);
         return sendError(res, 500, 'Failed to load profile', 'LOAD_FAILED');
       }
-      if (!data || data.is_banned) {
+      const row = data as unknown as Record<string, any> | null;
+      if (!row || row.is_banned) {
         return sendError(res, 404, 'Profile not found', 'NOT_FOUND');
       }
 
-      return res.json({ success: true, data: { user: mapPublicProfileRow(data) } });
+      return res.json({ success: true, data: { user: mapPublicProfileRow(row) } });
     } catch (err: any) {
       console.error('[users/:id/public] exception:', err);
       return sendError(res, 500, err?.message || 'Failed to load profile', 'LOAD_FAILED');

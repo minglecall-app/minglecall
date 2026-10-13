@@ -672,6 +672,13 @@ export const AdminTaxonomyManager: React.FC<AdminTaxonomyManagerProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
               {
+                key: 'xxs' as const,
+                label: 'XXS (Tiny Badges)',
+                badge: 'Discovery Card',
+                desc: 'Smaller than XS. Discovery card flag on mobile and desktop',
+                defaultH: 12,
+              },
+              {
                 key: 'xs' as const,
                 label: 'XS (Micro Badges)',
                 badge: 'Location & Meta',

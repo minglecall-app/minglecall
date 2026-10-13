@@ -365,7 +365,7 @@ interface AppContextType {
   openBlockReportModal: (userId: string, action?: 'report' | 'block') => void;
   closeBlockReportModal: () => void;
   blockReportModal: { userId: string; action: 'report' | 'block' } | null;
-  contributeToGoal: (creatorId: string, coins: number) => boolean;
+  contributeToGoal: (creatorId: string, coins: number) => Promise<boolean>;
 
   // Creator Reviews & Ratings (DB-backed via Express — not localStorage)
   creatorReviews: CreatorReview[];
@@ -908,6 +908,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const prevUserIdRef = useRef<string | null>(null);
   const isLoggedInRef = useRef<boolean>(isLoggedIn);
   const currentUserIdRef = useRef<string>(currentUserId);
+  /** Skip duplicate directory syncs on refresh / Discovery remount (Vercel). */
+  const lastDirectorySyncAtRef = useRef(0);
+  const refreshCallLogsFromDbRef = useRef<() => Promise<void>>(async () => {});
   /**
    * Editable profile fields saved locally but not yet confirmed by a matching
    * server row. Heartbeat realtime echoes must not paint the previous values
@@ -1144,36 +1147,42 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (isSupabaseConfigured()) {
         try {
           let dbProfile: any = null;
-          const { data: byAuth } = await supabase
+          // Public columns only (wallet/email REVOKE'd from client roles).
+          const profileSelect =
+            'id, auth_id, name, gender, age, dob, nationality, country_code, spoken_languages, bio, extended_bio, location_city, zodiac, interests, tags, interested_in, avatar_url, gallery, gallery_videos, intro_video_url, is_verified, online_status, role, is_onboarded, hourly_coin_rate, rating_score, total_reviews_count, total_calls_hosted, team_leader_id, created_by_id, active_session_id, created_at';
+          // One round-trip for auth_id or id (Vercel refresh path); email only if needed.
+          const { data: matched } = await supabase
             .from('profiles')
-            .select('*')
-            .eq('auth_id', authUserId)
-            .maybeSingle();
-          if (byAuth) {
-            dbProfile = byAuth;
-          } else {
-            const { data: byId } = await supabase
-              .from('profiles')
-              .select('*')
-              .eq('id', authUserId)
-              .maybeSingle();
-            if (byId) {
-              dbProfile = byId;
-            } else if (email) {
-              const { data: byEmail } = await supabase
-                .from('profiles')
-                .select('*')
-                .ilike('email', email)
-                .maybeSingle();
-              dbProfile = byEmail;
-            }
+            .select(profileSelect)
+            .or(`auth_id.eq.${authUserId},id.eq.${authUserId}`)
+            .limit(2);
+          if (Array.isArray(matched) && matched.length > 0) {
+            dbProfile =
+              matched.find((row: any) => String(row?.auth_id || '') === authUserId) ||
+              matched.find((row: any) => String(row?.id || '') === authUserId) ||
+              matched[0];
           }
+          // Email lookup omitted: email column is REVOKE'd from client roles.
           if (dbProfile) {
             dbActiveSessionId = dbProfile.active_session_id
               ? String(dbProfile.active_session_id).trim()
               : '';
             profile = mapDbProfileToUserProfile(dbProfile);
             if (!profile.authId) profile.authId = authUserId;
+          }
+
+          // Wallet columns are REVOKE'd from client roles — load via service-role API.
+          try {
+            const walletRes = await authFetch('/api/v1/users/me');
+            const walletJson = await walletRes.json().catch(() => null);
+            const me = walletJson?.data?.user;
+            if (walletRes.ok && me && profile) {
+              if (typeof me.coinBalance === 'number') profile.coinBalance = me.coinBalance;
+              if (typeof me.earningsCoins === 'number') profile.earningsCoins = me.earningsCoins;
+              if (me.email) profile.email = me.email;
+            }
+          } catch (walletErr) {
+            console.warn('[Auth Rehydrate] wallet hydrate notice:', walletErr);
           }
         } catch (err) {
           console.warn('[Auth Rehydrate] Profile fetch warning:', err);
@@ -1502,13 +1511,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         /* best effort */
       }
       // Host + caller call-log UIs must refresh after missed/declined/completed
-      if (isSupabaseConfigured()) {
-        fetchCallLogsFromSupabase()
-          .then((logs) => {
-            if (Array.isArray(logs)) setCallLogs(logs);
-          })
-          .catch(() => {});
-      }
+      void refreshCallLogsFromDbRef.current();
       // After a call, return to online (unless user chose offline). Clears sticky busy.
       if (preferredStatusRef.current !== 'offline') {
         preferredStatusRef.current = 'online';
@@ -1753,13 +1756,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
       }
 
-      if (isSupabaseConfigured()) {
-        fetchCallLogsFromSupabase()
-          .then((logs) => {
-            if (Array.isArray(logs)) setCallLogs(logs);
-          })
-          .catch(() => {});
-      }
+      void refreshCallLogsFromDbRef.current();
       return true;
     },
     []
@@ -2049,15 +2046,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     if (!isLoggedIn || !currentUserId || !isSupabaseConfigured()) return;
     const tick = () => {
-      fetchCallLogsFromSupabase()
-        .then((logs) => {
-          if (Array.isArray(logs)) setCallLogs(logs);
-        })
-        .catch(() => {});
+      void refreshCallLogsFromDbRef.current();
     };
     const timer = setInterval(tick, 12000);
     return () => clearInterval(timer);
   }, [isLoggedIn, currentUserId]);
+
+  /** Scoped call-log hydrate for Vercel refresh (Redis stays for presence; Supabase for rows). */
+  const refreshCallLogsFromDb = useCallback(async () => {
+    if (!isSupabaseConfigured()) return;
+    const uid = String(currentUserIdRef.current || '').trim();
+    if (!uid) return;
+    const me = usersRef.current.find((u) => u.id === uid || u.authId === uid);
+    const role = me?.role;
+    const needsPlatformLogs =
+      role === 'admin' || role === 'team_leader' || role === 'agency_manager';
+    try {
+      const logs = await fetchCallLogsFromSupabase({
+        userId: needsPlatformLogs ? undefined : uid,
+        limit: role === 'admin' ? 500 : needsPlatformLogs ? 300 : 100,
+      });
+      if (Array.isArray(logs)) setCallLogs(logs);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshCallLogsFromDbRef.current = refreshCallLogsFromDb;
+  }, [refreshCallLogsFromDb]);
 
   // Unified helper to calculate effective coin burn rate per minute for any host/caller pair
   const getEffectiveCallRate = (hostId?: string, callerId?: string): number => {
@@ -2095,6 +2112,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     users?: UserProfile[];
   }> => {
     try {
+      // Refresh + Discovery remount often fire back-to-back; skip if we just synced.
+      if (!showNotification) {
+        const elapsed = Date.now() - lastDirectorySyncAtRef.current;
+        if (
+          lastDirectorySyncAtRef.current > 0 &&
+          elapsed < 60_000 &&
+          usersRef.current.length > 0
+        ) {
+          return {
+            success: true,
+            count: usersRef.current.length,
+            users: usersRef.current,
+          };
+        }
+      }
+
       // Backend directory (service role) — cursor pages of 50 (never unbounded)
       let apiUsers: UserProfile[] | null = null;
       try {
@@ -2332,13 +2365,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
           setUsers(finalProfiles);
           usersRef.current = finalProfiles;
+          lastDirectorySyncAtRef.current = Date.now();
 
-          // Optional admin/server memory sync (non-blocking; 403 for non-admins is fine)
-          authFetch('/api/users/sync-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ users: finalProfiles, overwrite: true }),
-          }).catch((e) => console.warn('Server memory sync notice:', e));
+          // Heavy POST — only on manual sync or admin (skip every Vercel refresh).
+          const role = usersRef.current.find(
+            (u) => u.id === currentUserIdRef.current || u.authId === currentUserIdRef.current
+          )?.role;
+          if (showNotification || role === 'admin') {
+            authFetch('/api/users/sync-all', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ users: finalProfiles, overwrite: true }),
+            }).catch((e) => console.warn('Server memory sync notice:', e));
+          }
 
           if (showNotification) {
             showToast(
@@ -2358,11 +2397,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
       return { success: false, count: 0 };
     }
-  };
-
-  // Initial user directory fetch from server & Supabase for multi-device sync
-  const fetchUsersFromServer = async () => {
-    await syncUsersFromSupabase(false);
   };
 
   // Granular Reset: Selective or Full Wipe of Application & Storage State
@@ -3059,39 +3093,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [currentUserId]);
 
   useEffect(() => {
-    fetchUsersFromServer();
-    syncUsersFromSupabase();
+    // One directory sync on boot (was duplicated: fetchUsersFromServer + syncUsersFromSupabase).
+    void syncUsersFromSupabase(false);
 
     if (isSupabaseConfigured()) {
-      fetchPayoutRequestsFromSupabase()
-        .then((data) => {
-          if (data && data.length > 0) {
-            setPayoutRequests(data);
-          }
-        })
-        .catch((e) => console.warn('Supabase initial payout fetch note:', e));
-
-      fetchCallLogsFromSupabase()
-        .then((data) => {
-          if (Array.isArray(data)) {
-            setCallLogs(data);
-          }
-        })
-        .catch((e) => console.warn('Supabase initial call logs fetch note:', e));
-
-      const msgUid = currentUserIdRef.current;
-      if (msgUid) {
-        fetchRecentMessagesForUser(msgUid)
-          .then((msgs) => {
-            if (msgs) {
-              setChatMessages(msgs);
-              setReadMessageIds(
-                msgs.filter((m) => m.isRead || m.senderId === msgUid).map((m) => m.id)
-              );
-            }
-          })
-          .catch((e) => console.warn('Supabase initial messages fetch note:', e));
-      }
+      // Call logs / payouts wait for auth — see logged-in hydrate effect below.
 
       fetchSystemConfigsFromSupabase()
         .then((data) => {
@@ -3178,6 +3184,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 : prev.discoveryCardLayout,
               creatorTargetCycle: (data as any).creator_target_cycle ?? prev.creatorTargetCycle,
               periodCloseUtcTime: (data as any).period_close_utc_time ?? prev.periodCloseUtcTime,
+              financeCronCadence: (data as any).finance_cron_cadence ?? prev.financeCronCadence ?? 'daily',
               settlementEnabled: (data as any).settlement_enabled !== undefined ? (data as any).settlement_enabled : prev.settlementEnabled,
               profileVideoQuotaMb:
                 (data as any).r2_profile_video_quota_mb ?? prev.profileVideoQuotaMb ?? 100,
@@ -3272,9 +3279,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setAppNavItems(mergeNavWithDefaults(mapped));
         })
         .catch((e) => console.warn('App nav hydrate failed:', e));
-
-      refreshFeedPosts()
-        .catch(() => { });
 
       fetchCoinPackagesFromSupabase()
         .then((pkgs) => {
@@ -3391,6 +3395,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       console.warn('URL auth check exception:', e);
     }
   }, []);
+
+  // After session hydrate: scoped call logs + payouts + feed (not on anonymous boot).
+  useEffect(() => {
+    if (!isLoggedIn || !currentUserId || !isSupabaseConfigured()) return;
+    let cancelled = false;
+    void refreshCallLogsFromDb();
+    void refreshFeedPosts().catch(() => {});
+    fetchPayoutRequestsFromSupabase()
+      .then((data) => {
+        if (!cancelled && data && data.length > 0) {
+          setPayoutRequests(data);
+        }
+      })
+      .catch((e) => console.warn('Supabase payout fetch note:', e));
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn, currentUserId, refreshCallLogsFromDb]);
 
   // Helper to map server-side active calls into AdminActiveCall
   const mapServerCallToAdminCall = (sc: any, userList: UserProfile[]): AdminActiveCall => {
@@ -4261,15 +4283,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             });
           } else if (data.type === 'call_logs:updated') {
             // Refresh platform/admin financial KPIs from authoritative DB call_logs
-            if (isSupabaseConfigured()) {
-              fetchCallLogsFromSupabase()
-                .then((logs) => {
-                  if (Array.isArray(logs)) {
-                    setCallLogs(logs);
-                  }
-                })
-                .catch((e) => console.warn('[WS] call_logs refresh note:', e));
-            }
+            void refreshCallLogsFromDbRef.current().catch((e) =>
+              console.warn('[WS] call_logs refresh note:', e)
+            );
           } else if (data.type === 'admin:active_calls_update') {
             const serverCalls: Array<{ id: string; callerId: string; receiverId: string; status: 'active' | 'ringing'; startTime: number; durationSeconds: number }> = data.activeCalls || [];
             if (serverCalls.length === 0) {
@@ -6600,12 +6616,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Deduct coins from caller, credit female receiver (if eligible)
     const receiverUser = users.find((u) => u.id === activeCall.receiverId);
     const tlId = receiverUser?.teamLeaderId || receiverUser?.createdById || null;
-    // Strict Earning Policy: only female creators or Team Leader managed hosts earn coins
-    const isEligibleFemaleCreator =
-      receiverUser?.role === 'female_creator' ||
-      receiverUser?.role === 'female_host' ||
-      Boolean(tlId);
-    const canReceiverEarn = isEligibleFemaleCreator;
+    // Strict: only verified host roles earn (not mere TL linkage)
+    const canReceiverEarn =
+      receiverUser?.role === 'female_creator' || receiverUser?.role === 'female_host';
     const giftSplit = computeGiftCoinSplit({
       giftCost: gift.coinCost,
       hostSharePercent:
@@ -9003,37 +9016,66 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const contributeToGoal = (creatorId: string, coins: number): boolean => {
+  const contributeToGoal = async (creatorId: string, coins: number): Promise<boolean> => {
+    if (!isLoggedIn || !currentUserId) {
+      showToast('Sign in required', 'Please sign in to contribute to a goal.', 'warning');
+      return false;
+    }
     if (currentUser.coinBalance < coins) {
       showToast('Insufficient Coins 🪙', 'Please top up your wallet to contribute to this goal.', 'error');
       return false;
     }
 
-    // Deduct from male user
-    setUsers((prev) =>
-      prev.map((u) => {
-        if (u.id === currentUser.id) {
-          return { ...u, coinBalance: u.coinBalance - coins };
-        }
-        if (u.id === creatorId) {
-          return { ...u, earningsCoins: (u.earningsCoins || 0) + coins };
-        }
-        return u;
-      })
-    );
+    try {
+      const res = await authFetch('/api/v1/goals/contribute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ creatorId, coins }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.success === false) {
+        const msg =
+          data?.error?.message || data?.error || data?.message || 'Contribution failed';
+        showToast('Contribution failed', String(msg), 'error');
+        return false;
+      }
 
-    // Update goal
-    setCreatorGoals((prev) => {
-      const current = prev[creatorId] || { title: 'Creator Target Goal', currentCoins: 0, targetCoins: 10000 };
-      const updatedCoins = current.currentCoins + coins;
-      return {
-        ...prev,
-        [creatorId]: { ...current, currentCoins: updatedCoins },
-      };
-    });
+      const payload = data?.data || {};
+      const senderBalance =
+        typeof payload.senderBalance === 'number' ? payload.senderBalance : null;
+      const hostEarnings =
+        typeof payload.hostEarnings === 'number' ? payload.hostEarnings : null;
+      const goal = payload.goal;
 
-    showToastKey('wallet.goal_contribution', { vars: { amount: coins } });
-    return true;
+      setUsers((prev) =>
+        prev.map((u) => {
+          if (u.id === currentUser.id && senderBalance != null) {
+            return { ...u, coinBalance: senderBalance };
+          }
+          if (u.id === creatorId && hostEarnings != null) {
+            return { ...u, earningsCoins: hostEarnings };
+          }
+          return u;
+        })
+      );
+
+      if (goal && creatorId) {
+        setCreatorGoals((prev) => ({
+          ...prev,
+          [creatorId]: {
+            title: goal.title || prev[creatorId]?.title || 'Creator Target Goal',
+            currentCoins: Number(goal.currentCoins) || 0,
+            targetCoins: Number(goal.targetCoins) || prev[creatorId]?.targetCoins || 10000,
+          },
+        }));
+      }
+
+      showToastKey('wallet.goal_contribution', { vars: { amount: coins } });
+      return true;
+    } catch (err: any) {
+      showToast('Contribution failed', err?.message || 'Network error', 'error');
+      return false;
+    }
   };
 
   // ============================================================================

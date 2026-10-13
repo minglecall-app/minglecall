@@ -17,3 +17,4 @@ export { createMessagesRouter } from './messages.routes';
 export { createFinanceRouter } from './finance.routes';
 export { createPayoutRouter } from './payout.routes';
 export { createUsersPublicRouter } from './users.routes';
+export { createGoalsRouter } from './goals.routes';

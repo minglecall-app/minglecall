@@ -986,12 +986,10 @@ export function createAdminRouter(ctx: ServerRuntime): Router {
           : undefined;
 
       if (nextUrl !== undefined) {
-        process.env.VITE_SUPABASE_URL = nextUrl;
         process.env.SUPABASE_URL = nextUrl;
         infraConfig.supabaseUrl = nextUrl;
       }
       if (nextAnon !== undefined) {
-        process.env.VITE_SUPABASE_ANON_KEY = nextAnon;
         process.env.SUPABASE_ANON_KEY = nextAnon;
         infraConfig.supabaseAnonKey = nextAnon;
       }

@@ -119,6 +119,7 @@ import {
   filterAdminNavGroups,
 } from './adminNavConfig';
 import { AdminOfficeRbacPage } from './AdminOfficeRbacPage';
+import { AdminCronSchedulePanel } from './AdminCronSchedulePanel';
 import { fetchOfficeRbacMe } from '../../services/officeRbacApi';
 import { hasOfficePermission } from '../../../shared/officeRbac/features';
 
@@ -3436,6 +3437,7 @@ export const AdminDashboard: React.FC = () => {
       {activeSubTab === 'cms-toasts' && canOffice('cms-toasts') && <AdminToastsMessagesCms />}
       {activeSubTab === 'cms-seo' && canOffice('cms-seo') && <AdminSeoBrandingCms />}
       {activeSubTab === 'office-rbac' && canOffice('office-rbac') && <AdminOfficeRbacPage />}
+      {activeSubTab === 'cron-schedule' && <AdminCronSchedulePanel />}
 
       {/* Sub-Tab: Worldwide Countries, Languages, Zodiac & Interests Control */}
       {activeSubTab === 'countries' && (

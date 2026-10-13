@@ -4,143 +4,196 @@
 
 **Workload Type:** Mixed Chat, Presence, Sign-in/out, Video Calls (LiveKit), Coin Billing System, swipe, matching, coin share split, finance, payment methods, etc
 
-**Primary Stack:** Vercel (Next.js) + Supabase (PostgreSQL) + Upstash Redis + LiveKit Cloud + Cloudflare R2
+**Primary Stack:** Next.js (App Router) on Vercel + Supabase (PostgreSQL + Auth + Realtime) + Upstash Redis + LiveKit Cloud + Cloudflare R2
+
+**Runtime (local + Vercel):** One Next.js app. `npm run dev` → `next dev`. `npm run build` / Vercel → `next build`. Do not use a separate Vite SPA or root `api/*.js` deploy.
 
 ## 1. Architectural Principles & Core Mandates
 
-1. **Never write transient state to PostgreSQL:** Heartbeats, online/offline presence updates, and temporary typing indicators must **never** hit the database directly. Use Redis.
+1. **Never write transient state to PostgreSQL:** Heartbeats, online/offline presence updates, and temporary typing indicators must **never** hit the database on every tick. Use Redis (`presence:{userId}` TTL).
 
 2. **Never trust the client for billing:** Coin deductions for paid calls must be executed and validated server-side using atomic database transactions and strict idempotency.
 
 3. **Keep database transactions short:** Never hold open a PostgreSQL connection or transaction while waiting for a video call or external network event.
 
-4. **Use targeted Realtime delivery:** Avoid broadcasting global events to all users. Use private, authenticated channels and targeted payloads.
+4. **Use targeted Realtime delivery:** Avoid broadcasting global events to all users. Use private, authenticated channels and targeted payloads (Supabase Realtime Broadcast / postgres_changes).
 
-5. **Stateless API Handlers:** Vercel functions are stateless. Never use in-memory `Map` or global variables to track active sessions, socket pools, or cluster-wide presence.
+5. **Stateless API on Vercel:** Handlers must not rely on in-memory `Map`s or process-global pools for presence, active calls, or sockets across invocations. Persist durable state in Supabase; ephemeral presence in Redis; media in LiveKit.
+
+6. **Canonical schema:** All DB structure lives in `/supabase_schema.sql`. Do not invent parallel migration trees unless explicitly requested.
 
 ## 2. Tech Stack Specification & Responsibilities
 
-| Component | Technology | Primary Responsibility | 
-| ----- | ----- | ----- | 
-| **Frontend / API** | Next.js on Vercel | SSR, Static assets, stateless API routes, auth validation, call orchestration | 
-| **Database & Auth** | Supabase PostgreSQL | Authoritative data source, relational data, chat history, user records, wallet ledger | 
-| **Realtime Engine** | Supabase Realtime | Delivering targeted chat messages and light live event notifications | 
-| **Cache & Presence** | Upstash Redis | Ephemeral online presence, session leases, token rate-limiting, hot public profiles cache | 
-| **Media Transport** | LiveKit Cloud | WebRTC video/audio transport, room management, media streams | 
-| **Media Storage** | Cloudflare R2 + CDN | User avatar images, media verification photos, heavy file storage | 
-| **Async Tasks** | Upstash QStash / Workers | Push notifications, email digests, analytical logs, backup routines | 
+| Component | Technology | Primary Responsibility |
+| ----- | ----- | ----- |
+| **Host** | Next.js 15 App Router on Vercel | Pages, static assets, Node Route Handlers, cron entrypoints |
+| **UI** | React in `src/` via `app/client-app.tsx` (`ssr: false` shell) | Client SPA shell; deep links re-export the same shell |
+| **API** | `app/api/[[...path]]/route.ts` → `getApp()` / `server/` | Auth, business mutations, LiveKit tokens, R2 presigns, finance jobs |
+| **Database & Auth** | Supabase PostgreSQL + Auth | Authoritative data, RLS, chat history, profiles, wallets / call_logs |
+| **Realtime** | Supabase Realtime | Targeted chat, call signals, light live events (not Express `/ws` on Vercel) |
+| **Cache & Presence** | Upstash Redis (REST) | `presence:{userId}` leases, rate limits, hot ephemeral keys |
+| **Media Transport** | LiveKit Cloud | WebRTC A/V; tokens minted **server-side only** |
+| **Media Storage** | Cloudflare R2 (presigned PUT) | Avatars, gallery, verification; metadata in Supabase |
+| **Cron** | `vercel.json` crons | e.g. `/api/v1/finance/jobs/close-due-periods` (Hobby: daily) |
 
-## 3. Vercel Configuration & API Rules
+**Legacy only:** `npm run dev:legacy-express` runs `server.ts` as a direct process for local dual-run. Do not add new Express WebSocket features. Production is Next on Vercel.
 
-### 3.1 Next.js Configuration (`next.config.js`)
+## 3. Vercel & Next.js Configuration
 
-* Ensure proper external asset domain whitelisting (Cloudflare R2 CDN, Supabase storage).
+### 3.1 Project settings
 
-* Configure environment variables securely on Vercel dashboards (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `UPSTASH_REDIS_REST_URL` / `KV_REST_API_URL`, `UPSTASH_REDIS_REST_TOKEN` / `KV_REST_API_TOKEN`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`).
+| Setting | Value |
+| ----- | ----- |
+| Framework Preset | **Next.js** |
+| Build Command | `next build` (or empty / default) |
+| Output Directory | **empty** (not `dist`) |
+| Install Command | `npm install` |
+| Root | `.` |
 
-### 3.2 Vercel Function Best Practices
+`vercel.json` is cron-only (no Vite `buildCommand` / SPA rewrite).
 
-* **Timeout & Sizing:** Keep API endpoints lean. Complex jobs must be offloaded to background workers.
+### 3.2 Next config (`next.config.mjs`)
 
-* **Connection Pooling:** Always connect to Supabase via its connection pooler URL (e.g., PgBouncer port `6543`) to prevent exhausting Postgres connection limits during traffic spikes.
+* Whitelist remote image hosts (Supabase, R2 / Cloudflare).
+* Map public Supabase env for the browser:
 
-* **No Long-lived WebSockets:** Do not attempt to run custom persistent TCP/WebSocket servers inside standard Vercel serverless functions. Use Supabase Realtime and LiveKit Cloud for real-time channels.
+  * `NEXT_PUBLIC_SUPABASE_URL` ← or fallback `VITE_SUPABASE_URL`
+  * `NEXT_PUBLIC_SUPABASE_ANON_KEY` ← or fallback `VITE_SUPABASE_ANON_KEY`
+
+* Client code must read **`process.env.NEXT_PUBLIC_*` as a direct property** (Next inlines only that form). Dynamic `process.env[key]` will be empty in the browser.
+* Keep secrets off `NEXT_PUBLIC_*` / `VITE_*`.
+
+### 3.3 Environment locations
+
+| Where | Purpose |
+| ----- | ----- |
+| `.env.local` | Local `next dev` / `next start` (gitignored) |
+| Vercel → Project → Environment Variables | Production + Preview (import same names; Vercel does **not** read `.env.local`) |
+| `.env.example` | Name checklist only — empty placeholders |
+
+Required names: see `docs/connection_pooling_and_env.md` and `.env.example`.
+
+### 3.4 Function best practices
+
+* Keep Route Handlers lean; finance close job uses `CRON_SECRET` / `FINANCE_JOB_SECRET` + `FINANCE_JOB_ACTOR_USER_ID`.
+* Use Supabase HTTPS + service role for most data access; use `DATABASE_URL` pooler `:6543` only for raw SQL drivers.
+* **No long-lived custom WebSockets on Vercel.** Signaling = Supabase Realtime; A/V = LiveKit. Leave `NEXT_PUBLIC_API_BASE_URL` / `VITE_API_BASE_URL` unset so the browser calls same-origin `/api/*`.
 
 ## 4. Upstash Redis Implementation & Operations
 
-### 4.1 Key Naming Conventions & TTL Rules
+### 4.1 Key naming & TTL
 
-| Data Type | Redis Key Pattern | TTL / Expiration | Purpose | 
-| ----- | ----- | ----- | ----- | 
-| **User Presence Lease** | `presence:{userId}` | 60–90 seconds | Tracks if user is active; refreshed via heartbeats | 
-| **Cached Profile** | `profile:{userId}` | 30–120 seconds | Public profile attributes (name, age, bio, avatar URL) | 
-| **Rate Limit** | `rate:{userId}:{endpoint}` | Short window (e.g., 10–60s) | Prevents spamming endpoints or abuse | 
-| **Call Room State** | `call:{callId}` | Dynamic (Call duration max) | Tracks active call tokens and participants | 
+| Data Type | Redis Key Pattern | TTL / Expiration | Purpose |
+| ----- | ----- | ----- | ----- |
+| **User Presence Lease** | `presence:{userId}` | 60–90 seconds | Active lease; refreshed via heartbeats |
+| **Cached Profile** | `profile:{userId}` | 30–120 seconds | Optional hot public attributes |
+| **Rate Limit** | `rate:{userId}:{endpoint}` | Short window (e.g. 10–60s) | Abuse protection |
+| **Call Room State** | `call:{callId}` | Dynamic (call max) | Ephemeral call coordination when used |
 
-### 4.2 Presence Heartbeat Protocol
+Use **HTTPS REST** credentials: `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`, or `KV_REST_API_URL` + `KV_REST_API_TOKEN`. A `rediss://` `KV_URL` / `REDIS_URL` alone is **not** enough for the REST client.
 
-* Clients emit a jittered heartbeat signal every **30 seconds** (randomized offset to prevent synchronized write bursts).
+### 4.2 Presence heartbeat protocol
 
-* The API updates the Redis key `presence:{userId}` with a 60–90 second expiration using atomic Redis commands.
-
-* If a client disconnects unexpectedly, the key naturally expires without writing trash data to PostgreSQL.
-
-* Durable last-seen values are written to PostgreSQL **only** upon explicit login/logout or significant state transitions, never on heartbeat ticks.
+* Clients heartbeat on a ~30s jittered interval to `POST /api/presence/heartbeat`.
+* API updates Redis `presence:{userId}` with 60–90s TTL.
+* Unexpected disconnect → key expires; do not write Postgres on every tick.
+* Durable `last_seen` / status transitions → PostgreSQL only on login, logout, or significant changes.
 
 ## 5. Supabase Database Design & Rules
 
-### 5.1 Core Schema Blueprint
+### 5.1 Source of truth
 
-* **`profiles`**: `id` (UUID, PK, references auth.users), `username`, `bio`, `avatar_url`, `created_at`, `updated_at`.
+* Full schema: **`/supabase_schema.sql`**.
+* App tables in use include (non-exhaustive): `profiles`, `messages`, `call_logs`, `system_configs`, wallets / ledger RPCs, finance settlement tables, CMS tables, etc.
+* Messaging today is a **pair model** (sender/receiver), not a mandatory `conversation_id` column. Do not add conversation indexes until that model exists in schema + code.
 
-* **`conversations`**: `id` (UUID, PK), `created_at`, `updated_at`.
+### 5.2 Database performance rules
 
-* **`conversation_members`**: `conversation_id` (FK), `user_id` (FK), `joined_at`.
+1. **Indexing:** Every FK and hot filter column must have indexes (see schema + `docs/connection_pooling_and_env.md`).
+2. **Pagination:** Discovery and messages use cursor pages (limit 30–50). Never unconstrained `select *` for directories or history.
+3. **Wallet safety:** Coin burns / gifts use atomic SQL / RPCs with locks or equivalent; never trust client amounts.
+4. **RLS:** Enabled on user-accessible tables; service role only on the server.
 
-* **`messages`**: `id` (UUID, PK), `conversation_id` (FK), `sender_id` (FK), `content` (TEXT), `created_at` (TIMESTAMPTZ). **Index required on `(conversation_id, created_at)`**.
+## 6. End-to-End Delivery & Data Flow
 
-* **`calls`**: `id` (UUID, PK), `caller_id` (FK), `callee_id` (FK), `status` (initiated, active, ended, missed), `started_at`, `ended_at`, `rate_per_min`.
+### 6.1 Authentication
 
-* **`wallets`**: `user_id` (UUID, PK, FK), `balance` (BIGINT / NUMERIC), `updated_at`.
+1. Browser uses **Supabase Auth** (session in client; bearer token to APIs).
+2. API verifies JWT; never trust client-submitted `user_id` / role for authorization.
+3. Presence lease set/refreshed via heartbeat API → Redis.
+4. Sign-out clears session and presence; durable last-seen update is a transition write, not a heartbeat.
 
-* **`wallet_transactions`**: `id` (UUID, PK), `user_id` (FK), `amount` (NUMERIC), `type` (credit, debit_call, reward), `reference_id`, `created_at`.
+### 6.2 Chat
 
-### 5.2 Database Performance Rules
+1. Client `POST /api/messages` (or `/api/v1/...` equivalent under the catch-all).
+2. Route Handler authenticates, validates membership / blocks / limits, inserts into Supabase.
+3. Supabase Realtime delivers to the recipient; history loads via cursor pagination from Postgres.
 
-1. **Indexing:** Every foreign key and frequently filtered column (e.g., `messages.conversation_id`, `conversations.updated_at`) must have explicit b-tree indexes.
+### 6.3 Video calling & billing
 
-2. **Pagination:** Message fetch queries must use cursor-based pagination (e.g., `WHERE conversation_id = X AND created_at < cursor LIMIT 30`). Never fetch an entire conversation history unconstrained.
+1. Call orchestration via authenticated API; membership recorded in `call_logs` (and Redis where used).
+2. LiveKit access token minted **only** on the server; secret never in the browser.
+3. Media stays on LiveKit/WebRTC.
+4. Coin burn / settlement runs server-side with idempotent ledger updates.
 
-3. **Transaction Safety for Wallets:** Coin deductions must use SQL transactions with row-level locks (`SELECT ... FOR UPDATE`) or explicit atomic checks to avoid race conditions and double-spending.
+### 6.4 Cache vs database
 
-## 6. End-to-End Delivery & Data Flow Mechanisms
+* **Redis:** Presence, rate limits, short-lived coordination keys.
+* **Supabase:** Profiles, wallets, messages, call history, admin/finance configs — authoritative.
 
-### 6.1 Authentication & Sign-in / Sign-out Flow
+## 7. Local vs Vercel (same app)
 
-1. **Client** authenticates via Supabase Auth.
+| | Localhost | Vercel |
+| ----- | ----- | ----- |
+| Command | `npm run dev` | Git push → `next build` |
+| Env file | `.env.local` | Project Environment Variables |
+| API | Same-origin `/api/*` via Next Route Handler | Same |
+| Presence | Upstash / KV REST | Same |
+| Signaling | Supabase Realtime (default) | Same |
+| Cron | Manual / curl with job secret | `vercel.json` schedule |
 
-2. **Backend/API** verifies session, generates JWT/cookies, and sets a Redis presence session (`presence:{userId}`).
+## 8. Load Testing Targets & Acceptance Criteria (10k Concurrency)
 
-3. **Client** mounts and opens subscribed channels.
+Before production load claims, validate with `k6` (see `k6/` and `npm run test:load`):
 
-4. **Sign-out:** Client hits sign-out endpoint, clearing the Redis presence key immediately and updating `last_seen` in PostgreSQL.
+* **Steady state:** 10,000 concurrent users maintaining presence **without** Postgres heartbeat saturation (Redis required).
+* **API bursts:** 500–1,000 RPS on auth/profile-style reads with p95 ≤ 300 ms.
+* **Chat delivery:** p95 ≤ 500 ms under normal conditions.
+* **Reconnect storms:** ~5,000 clients reconnect in ~30s; Redis TTL recovers cleanly.
+* **Billing concurrency:** Parallel coin deductions with zero double-charges.
 
-### 6.2 Chat Message Delivery Flow
+Always run load tests against a **staging** project with Redis configured — never against production with heartbeat falling through to Postgres.
 
-1. **Sender Client** sends a POST request to `/api/messages` with `conversation_id` and `content`.
 
-2. **Next.js API Route** authenticates the user, checks conversation membership, and inserts the record into Supabase PostgreSQL (`messages` table).
+## 9. Monetization, Coin Burn & Real-Time Billing Architecture
 
-3. **Supabase Realtime (Broadcast / Postgres Changes)** dispatches the new message event to the targeted `conversation_id` channel.
+1. **Atomic Coin Deductions:** All coin burns (gifts, video call per-minute billing, quick match fees) must use Supabase Postgres RPC functions with row-level locking (`SELECT ... FOR UPDATE` on `wallets`) to prevent negative balances and race conditions.
+2. **Video Call Billing Ticks:** 
+   * During an active 1-on-1 video call, the client or server initiates a periodic sync (e.g., every 30–60 seconds).
+   * Ephemeral consumption counters are tracked in Redis (`call:ledger:{callId}`) to minimize Postgres write pressure.
+   * Upon call termination, the total delta is flushed atomically to the `call_logs` table and the financial ledger.
+3. **Multi-Tier Revenue Share Split (Host + TL + Platform):**
+   * Revenue splits must be computed server-side via database triggers or idempotent financial ledger entries upon transaction settlement.
+   * Split configurations (percentages for Platform, Team Leader / Agency, and Host) must be fetched from cached `system_configs` or immutable historical snapshots per transaction, avoiding real-time lookups of mutable profile settings.
 
-4. **Recipient Client** receives the real-time payload via WebSocket, appends the message to local state. If offline, messages are fetched upon reconnect via cursor pagination.
+## 10. Team Leader (TL) & Agency Management Rules
 
-### 6.3 Video Calling & Coin Billing Flow
+1. **Hierarchical Relationships:** A dedicated `agency_memberships` or `tl_hosts` table must map hosts to their respective Team Leaders with audit trails for start/end dates.
+2. **Dashboard Isolation:** TL dashboard queries must be strictly scoped via Supabase Row Level Security (RLS) policies or server-side role checks (`auth.jwt() ->> 'role'`) ensuring TLs only access analytics and salary data for their assigned downline hosts.
 
-1. **Caller** initiates a call via API. Backend verifies both users' wallet balances (minimum threshold check).
+## 11. Swipe, Discovery & Matching Engine
 
-2. **Backend** generates a secure **LiveKit Access Token** and returns room credentials.
+1. **Cursor Pagination:** Discovery feeds and swipe card queues must use keyset/cursor pagination (e.g., `WHERE id > last_seen_id LIMIT 20`) combined with exclusion filters (`swiped_users` table) to avoid expensive `OFFSET` scans.
+2. **Quick Match Queue:** Quick match candidate matching should prioritize active Redis presence keys (`presence:{userId}`) to ensure users matched for instant calls are actively online, preventing dead connection attempts.
 
-3. **LiveKit Cloud** handles peer-to-peer/SFU WebRTC media transport entirely outside the application database.
+## 12. Finance & Salary Batches
 
-4. **Billing Service (Server-side):** Periodically validates call duration, calculates coin burn rates (e.g., 120 coins/min for friends, 180 coins/min for non-friends), and executes atomic debit transactions against the Supabase `wallets` ledger table.
+1. **Period Closing & Idempotency:** Salary batch calculations (`/api/v1/finance/batches`) must use idempotency keys and transactional locks. Once a batch status is marked `processing` or `paid`, it cannot be recalculated.
+2. **Cron Automation:** Financial period closings run via Vercel Cron (`vercel.json`) with mandatory secret header verification (`Authorization: Bearer $FINANCE_JOB_SECRET`).
 
-### 6.4 What is Served from Cache vs. Database?
+## 13. K6 Load Testing Requirements for Dating Features
 
-* **Served from Redis Cache:** Public user profiles (`profile:{userId}` with 30s-2min TTL), presence status maps, rate limit tokens.
-
-* **Served Directly from Database (Supabase):** Secure auth profiles, wallet balances (authoritative), complete chat message history, transaction ledgers, call histories.
-
-## 7. Load Testing Targets & Acceptance Criteria (10k Concurrency)
-
-Before deploying to production, validate the system using tools like `k6` against these performance metrics:
-
-* **Steady State Load:** 10,000 active concurrent users maintaining presence without database CPU saturation.
-
-* **API Bursts:** Handle 500–1,000 requests per second (RPS) on authentication and profile reads with p95 latency $\le 300\text{ ms}$.
-
-* **Chat Delivery Latency:** End-to-end message delivery under normal conditions at p95 $\le 500\text{ ms}$.
-
-* **Reconnect Storms:** Simulate 5,000 clients dropping and reconnecting over a 30-second window to verify Redis expiry handling and clean state recovery without cascading API failures.
-
-* **Billing Concurrency:** Execute 1,000 simultaneous coin-deduction transactions with zero duplicate charges or ledger corruption.
+Load testing scripts in `k6/` must simulate realistic user behavior distributions:
+* **Presence & Heartbeat Storms:** 5,000 concurrent users hitting `/api/presence/heartbeat` at jittered 30s intervals.
+* **Swipe & Match Throughput:** Concurrent swipe requests maintaining sub-200ms p95 latency.
+* **Video Call Signaling & Token Minting:** Concurrent requests to `/api/livekit/token` verifying rate limits and token generation under load.

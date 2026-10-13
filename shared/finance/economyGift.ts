@@ -8,6 +8,19 @@ import { normalizeSharePercent } from './economyBurn';
 export const DEFAULT_GIFT_FEMALE_HOST_SHARE_PERCENT = 70;
 export const DEFAULT_GIFT_TEAM_LEADER_SHARE_PERCENT = 10;
 
+/** Fixed tip catalog (server-authoritative; client may only pick these amounts). */
+export const TIP_CATALOG_COINS = [20, 50, 100, 200] as const;
+export const DEFAULT_TIP_COINS = 20;
+
+/**
+ * Host credit for gifts/tips is limited to verified host roles.
+ * Team-leader linkage alone must not unlock earnings.
+ */
+export function isGiftEligibleHostRole(role?: string | null): boolean {
+  const r = String(role || '').trim();
+  return r === 'female_creator' || r === 'female_host';
+}
+
 export interface EconomyGiftShares {
   giftFemaleHostSharePercent: number;
   giftTeamLeaderSharePercent: number;

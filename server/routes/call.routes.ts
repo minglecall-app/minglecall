@@ -15,9 +15,6 @@ import {
   resolveEconomyBurnRates,
 } from '../../shared/finance/economyBurn';
 
-/** In-memory idempotency when Supabase RPC is unavailable. */
-const memoryBurnKeys = new Set<string>();
-
 function isFemaleCreatorRole(role?: string | null): boolean {
   return role === 'female_creator' || role === 'female_host';
 }
@@ -293,15 +290,45 @@ export function createCallRouter(ctx: ServerRuntime): Router {
         });
       }
 
-      const call = activeCalls.get(callId);
-      if (!call || call.status === 'ended') {
+      // Authoritative call state from Supabase (Vercel is multi-instance; activeCalls Map is not shared).
+      const supabase = getSupabaseAdmin();
+      if (!isSupabaseAdminConfigured() || !supabase) {
+        return res.status(503).json({
+          success: false,
+          error: { message: 'Billing unavailable', code: 'NO_SUPABASE' },
+        });
+      }
+
+      const { data: callRow, error: callErr } = await supabase
+        .from('call_logs')
+        .select('id, caller_id, receiver_id, host_id, status')
+        .eq('id', callId)
+        .maybeSingle();
+
+      if (callErr) {
+        console.error('[calls/burn] call_logs read:', callErr.message);
+        return res.status(500).json({
+          success: false,
+          error: { message: 'Failed to load call', code: 'CALL_LOOKUP_FAILED' },
+        });
+      }
+
+      if (!callRow) {
         return res.status(404).json({
           success: false,
           error: { message: 'Active call not found', code: 'CALL_NOT_FOUND' },
         });
       }
 
-      if (call.status !== 'active') {
+      const callStatus = String(callRow.status || '').toLowerCase();
+      if (callStatus === 'ended' || callStatus === 'completed' || callStatus === 'missed' || callStatus === 'declined' || callStatus === 'cancelled') {
+        return res.status(404).json({
+          success: false,
+          error: { message: 'Active call not found', code: 'CALL_NOT_FOUND' },
+        });
+      }
+
+      if (callStatus !== 'active') {
         return res.status(409).json({
           success: false,
           error: {
@@ -311,19 +338,42 @@ export function createCallRouter(ctx: ServerRuntime): Router {
         });
       }
 
-      if (call.callerId !== callerId) {
+      if (String(callRow.caller_id) !== String(callerId)) {
         return res.status(403).json({
           success: false,
           error: { message: 'Only the call caller may trigger billing', code: 'FORBIDDEN' },
         });
       }
 
-      const receiverId = call.receiverId;
-      let receiver =
-        serverUsers.get(receiverId) ||
-        null;
+      const receiverId = String(callRow.receiver_id || callRow.host_id || '');
+      if (!receiverId) {
+        return res.status(404).json({
+          success: false,
+          error: { message: 'Receiver profile not found', code: 'RECEIVER_NOT_FOUND' },
+        });
+      }
 
-      const supabase = getSupabaseAdmin();
+      let receiver = serverUsers.get(receiverId) || null;
+
+      // Optional per-isolate mirror for legacy WS/admin views — never authoritative for billing.
+      let call = activeCalls.get(callId);
+      if (!call) {
+        call = {
+          id: callId,
+          callerId: String(callRow.caller_id),
+          receiverId,
+          status: 'active',
+          coinsSpent: 0,
+          coinsEarned: 0,
+          teamLeaderEarnedCoins: 0,
+          durationSeconds: 0,
+        } as any;
+        activeCalls.set(callId, call);
+      } else {
+        call.status = 'active';
+        call.callerId = String(callRow.caller_id);
+        call.receiverId = receiverId;
+      }
 
       // Live rates + split percents from system_configs (finance config cache / DB)
       const financeCfg = await loadFinanceSystemConfig();
@@ -498,92 +548,26 @@ export function createCallRouter(ctx: ServerRuntime): Router {
         isFemaleCreator: isCreator,
       };
 
-      let rpcResult: any = null;
+      const { data: rpcRaw, error: rpcError } = await supabase.rpc('burn_call_coins_atomic', {
+        p_caller_id: callerId,
+        p_receiver_id: receiverId,
+        p_tl_id: tlId,
+        p_call_id: callId,
+        p_billing_minute: billingMinute,
+        p_coins_burned: coinsBurned,
+        p_host_coins_earned: hostCoinsEarned,
+        p_tl_coins_earned: tlCoinsEarned,
+        p_metadata: metadata,
+      });
 
-      if (isSupabaseAdminConfigured() && supabase) {
-        const { data, error } = await supabase.rpc('burn_call_coins_atomic', {
-          p_caller_id: callerId,
-          p_receiver_id: receiverId,
-          p_tl_id: tlId,
-          p_call_id: callId,
-          p_billing_minute: billingMinute,
-          p_coins_burned: coinsBurned,
-          p_host_coins_earned: hostCoinsEarned,
-          p_tl_coins_earned: tlCoinsEarned,
-          p_metadata: metadata,
+      if (rpcError) {
+        console.error('[calls/burn] RPC error:', rpcError.message);
+        return res.status(500).json({
+          success: false,
+          error: { message: 'Billing RPC failed', code: 'BILLING_RPC_FAILED' },
         });
-
-        if (error) {
-          console.error('[calls/burn] RPC error:', error.message);
-          return res.status(500).json({
-            success: false,
-            error: { message: 'Billing RPC failed', code: 'BILLING_RPC_FAILED' },
-          });
-        }
-        rpcResult = data;
-      } else {
-        // Memory fallback (dev without Supabase)
-        const key = `${callId}:${billingMinute}:CALL_DEBIT:${callerId}`;
-        const caller = serverUsers.get(callerId);
-        if (!caller) {
-          return res.status(404).json({
-            success: false,
-            error: { message: 'Caller not found', code: 'CALLER_NOT_FOUND' },
-          });
-        }
-        if (memoryBurnKeys.has(key)) {
-          rpcResult = {
-            success: true,
-            duplicate: true,
-            new_caller_balance: caller.coinBalance,
-            new_host_earnings: serverUsers.get(receiverId)?.earningsCoins || 0,
-            new_tl_earnings: tlId ? serverUsers.get(tlId)?.earningsCoins || 0 : 0,
-            coins_burned: coinsBurned,
-            host_coins_earned: hostCoinsEarned,
-            tl_coins_earned: tlCoinsEarned,
-          };
-        } else if ((caller.coinBalance || 0) < coinsBurned) {
-          rpcResult = {
-            success: false,
-            new_caller_balance: caller.coinBalance || 0,
-            error_message: 'INSUFFICIENT_BALANCE',
-            code: 'INSUFFICIENT_BALANCE',
-          };
-        } else {
-          memoryBurnKeys.add(key);
-          caller.coinBalance = Math.max(0, (caller.coinBalance || 0) - coinsBurned);
-          serverUsers.set(callerId, caller);
-          let hostEarnings = 0;
-          let tlEarnings = 0;
-          if (hostCoinsEarned > 0 && isCreator) {
-            const host = serverUsers.get(receiverId);
-            if (host) {
-              host.earningsCoins = (host.earningsCoins || 0) + hostCoinsEarned;
-              host.totalCallMinutes = (host.totalCallMinutes || 0) + 1;
-              serverUsers.set(receiverId, host);
-              hostEarnings = host.earningsCoins;
-            }
-          }
-          if (tlCoinsEarned > 0 && tlId) {
-            const tl = serverUsers.get(tlId);
-            if (tl) {
-              tl.earningsCoins = (tl.earningsCoins || 0) + tlCoinsEarned;
-              serverUsers.set(tlId, tl);
-              tlEarnings = tl.earningsCoins;
-            }
-          }
-          rpcResult = {
-            success: true,
-            duplicate: false,
-            new_caller_balance: caller.coinBalance,
-            new_host_earnings: hostEarnings,
-            new_tl_earnings: tlEarnings,
-            coins_burned: coinsBurned,
-            host_coins_earned: hostCoinsEarned,
-            tl_coins_earned: tlCoinsEarned,
-          };
-        }
       }
+      const rpcResult = typeof rpcRaw === 'string' ? JSON.parse(rpcRaw) : rpcRaw;
 
       const insufficient =
         !rpcResult?.success &&

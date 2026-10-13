@@ -50,9 +50,10 @@ export const DiscoveryGrid: React.FC<DiscoveryGridProps> = ({ onStartCall, onOpe
   const [isSyncing, setIsSyncing] = useState(false);
   const [discoveryTab, setDiscoveryTab] = useState<'all' | 'ready_now' | 'trending' | 'gold_silver'>('all');
 
-  // Sync latest user details from Supabase when Discovery Grid opens
+  // Directory already syncs on App boot; skip remount if we have profiles (Vercel refresh).
   useEffect(() => {
-    syncUsersFromSupabase(false);
+    if (users.length > 0) return;
+    void syncUsersFromSupabase(false);
   }, []);
 
   const handleManualSync = async () => {

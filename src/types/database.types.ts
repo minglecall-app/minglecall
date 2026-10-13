@@ -377,6 +377,8 @@ export interface Database {
           creator_target_gold_bonus_usd?: number;
           /** UTC HH:mm for Financial Module period close (default 00:00). */
           period_close_utc_time?: string;
+          finance_cron_cadence?: string;
+          finance_cron_last_run_at?: string | null;
           /** When true, period-end settlement batches are the intended cash-out path. */
           settlement_enabled?: boolean;
           peak_hours_start?: string;

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import '../src/index.css';
 import { DEFAULT_SITE_BRANDING } from '../shared/cms/siteBranding';
 
@@ -7,7 +7,6 @@ export const metadata: Metadata = {
   title: DEFAULT_SITE_BRANDING.pageTitle,
   description: DEFAULT_SITE_BRANDING.metaDescription,
   applicationName: DEFAULT_SITE_BRANDING.siteName,
-  themeColor: DEFAULT_SITE_BRANDING.themeColor,
   icons: {
     icon: DEFAULT_SITE_BRANDING.faviconUrl,
     apple: DEFAULT_SITE_BRANDING.faviconUrl,
@@ -18,6 +17,10 @@ export const metadata: Metadata = {
     siteName: DEFAULT_SITE_BRANDING.siteName,
     type: 'website',
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: DEFAULT_SITE_BRANDING.themeColor,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

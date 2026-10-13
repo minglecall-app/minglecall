@@ -310,6 +310,46 @@ export function mapDbMessageToChatMessage(db: DbMessage): ChatMessage {
 const DISCOVERY_PAGE_SIZE = 50;
 const DISCOVERY_MAX_PAGES = 10; // hard cap: 500 profiles per sync
 
+/** Public dating columns only — wallets/email are REVOKE'd from anon/authenticated. */
+const DISCOVERY_PROFILE_SELECT = [
+  'id',
+  'name',
+  'gender',
+  'age',
+  'dob',
+  'nationality',
+  'country_code',
+  'spoken_languages',
+  'bio',
+  'extended_bio',
+  'location_city',
+  'zodiac',
+  'interests',
+  'tags',
+  'interested_in',
+  'avatar_url',
+  'gallery',
+  'gallery_videos',
+  'intro_video_url',
+  'is_verified',
+  'online_status',
+  'role',
+  'response_rate',
+  'hourly_coin_rate',
+  'rating_score',
+  'total_reviews_count',
+  'total_calls_hosted',
+  'exact_location',
+  'is_using_mock_location',
+  'mock_location_city',
+  'mock_location_country',
+  'mock_location_country_code',
+  'created_at',
+  'is_banned',
+  'team_leader_id',
+  'created_by_id',
+].join(', ');
+
 /** One discovery page — cursor is the last row's created_at (DESC). */
 export async function fetchProfilesPageFromSupabase(opts?: {
   filterRole?: string;
@@ -322,7 +362,7 @@ export async function fetchProfilesPageFromSupabase(opts?: {
   try {
     let query = supabase
       .from('profiles')
-      .select('*')
+      .select(DISCOVERY_PROFILE_SELECT)
       // Treat NULL is_banned as not banned (eq.false alone drops legacy/null rows)
       .or('is_banned.eq.false,is_banned.is.null')
       .order('created_at', { ascending: false })
@@ -1690,6 +1730,8 @@ export async function updateSystemConfigsInSupabase(
     if (updates.creatorTargetCycle !== undefined) payload.creator_target_cycle = updates.creatorTargetCycle;
     if (updates.creator_target_cycle !== undefined) payload.creator_target_cycle = updates.creator_target_cycle;
     if (updates.periodCloseUtcTime !== undefined) payload.period_close_utc_time = updates.periodCloseUtcTime;
+    if (updates.financeCronCadence !== undefined) payload.finance_cron_cadence = updates.financeCronCadence;
+    if (updates.finance_cron_cadence !== undefined) payload.finance_cron_cadence = updates.finance_cron_cadence;
     if (updates.period_close_utc_time !== undefined) payload.period_close_utc_time = updates.period_close_utc_time;
     if (updates.settlementEnabled !== undefined) payload.settlement_enabled = updates.settlementEnabled;
     if (updates.settlement_enabled !== undefined) payload.settlement_enabled = updates.settlement_enabled;
@@ -2588,14 +2630,35 @@ export async function upsertPayoutRequestToSupabase(_payout: any): Promise<boole
 // CALL LOGS API
 // ============================================================================
 
-export async function fetchCallLogsFromSupabase(): Promise<any[] | null> {
+export type FetchCallLogsOptions = {
+  /** When set, only logs where this user is caller, receiver, or host. */
+  userId?: string;
+  /** Default 100 for a user session; admins may pass a higher cap. */
+  limit?: number;
+};
+
+export async function fetchCallLogsFromSupabase(
+  options: FetchCallLogsOptions = {}
+): Promise<any[] | null> {
   if (!isSupabaseConfigured()) return null;
   try {
-    const { data, error } = await supabase
+    const limit = Math.max(1, Math.min(1000, Math.round(options.limit ?? 100)));
+    const userId = String(options.userId || '').trim();
+
+    let query = supabase
       .from('call_logs')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(2000);
+      .limit(limit);
+
+    // Scoped read for Vercel refresh: avoid pulling the whole platform table into the browser.
+    if (userId) {
+      query = query.or(
+        `caller_id.eq.${userId},receiver_id.eq.${userId},host_id.eq.${userId}`
+      );
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.warn('Supabase fetchCallLogs error:', error.message);

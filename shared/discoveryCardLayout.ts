@@ -104,7 +104,7 @@ export const PAD_BOUNDS = { min: -12, max: 16, default: 0 } as const;
  */
 export const WIDTH_BOUNDS = { min: 0, max: 100, default: 0 } as const;
 
-export type DiscoveryFlagSize = 'xs' | 'sm' | 'md';
+export type DiscoveryFlagSize = 'xxs' | 'xs' | 'sm' | 'md';
 export type DiscoveryAspectMobile = '2/3' | '9/16';
 export type DiscoveryAspectDesktop = '3/4' | '2/3';
 export type DiscoveryCallStyle = 'circle' | 'pill';
@@ -224,7 +224,7 @@ function defaultWidgets(): DiscoveryCardWidgetConfig[] {
 }
 
 function coerceFlagSize(v: unknown): DiscoveryFlagSize {
-  return v === 'xs' || v === 'md' || v === 'sm' ? v : 'sm';
+  return v === 'xxs' || v === 'xs' || v === 'md' || v === 'sm' ? v : 'sm';
 }
 
 function coerceAspectMobile(v: unknown): DiscoveryAspectMobile {

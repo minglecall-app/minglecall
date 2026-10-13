@@ -313,17 +313,22 @@ export class RealtimeSignaling {
   }
 }
 
+function readPublicEnv(key: string): string {
+  try {
+    const fromVite = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.[key];
+    if (fromVite) return String(fromVite).trim();
+  } catch {
+    /* Next does not fill import.meta.env */
+  }
+  return String(typeof process !== 'undefined' ? process.env[key] || '' : '').trim();
+}
+
 export function shouldUseRealtimeSignaling(): boolean {
   if (!isSupabaseConfigured()) return false;
-  const flag = String(import.meta.env.VITE_USE_REALTIME || '')
-    .trim()
-    .toLowerCase();
+  const flag = (readPublicEnv('NEXT_PUBLIC_USE_REALTIME') || readPublicEnv('VITE_USE_REALTIME')).toLowerCase();
   if (flag === 'true' || flag === '1') return true;
   if (flag === 'false' || flag === '0') return false;
-  // Explicit Express WS host → keep native WebSocket
-  if (String(import.meta.env.VITE_WS_URL || '').trim()) return false;
-  // Production same-origin (Vercel) — no persistent /ws
-  if (import.meta.env.PROD) return true;
-  // Local Vite + Express keeps /ws
-  return false;
+  if ((readPublicEnv('NEXT_PUBLIC_WS_URL') || readPublicEnv('VITE_WS_URL')).length > 0) return false;
+  // Next.js on localhost and Vercel uses Supabase Realtime. There is no Express /ws.
+  return true;
 }
